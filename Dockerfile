@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     fonts-dejavu \
-    fonts-noto-cjk \
+    fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
