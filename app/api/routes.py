@@ -1,6 +1,7 @@
 import io
 import logging
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -11,6 +12,18 @@ from app.services.converter import EPUBToPDFConverter, ConversionError
 router = APIRouter(prefix="/api", tags=["converter"])
 logger = logging.getLogger(__name__)
 converter = EPUBToPDFConverter()
+
+
+def get_disposition_header(original_filename: str) -> str:
+    """Generate Content-Disposition header with RFC 5987 UTF-8 filename support"""
+    # Remove .epub extension and add .pdf
+    pdf_name = original_filename.rsplit('.', 1)[0] + '.pdf' if '.' in original_filename else original_filename + '.pdf'
+    
+    # RFC 5987 encoding: supports UTF-8 filenames with ASCII fallback
+    encoded_name = quote(pdf_name.encode('utf-8'), safe='')
+    ascii_fallback = "output.pdf"
+    
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded_name}'
 
 
 def _validate_file(file: UploadFile) -> None:
@@ -99,15 +112,15 @@ async def convert_epub_to_pdf(file: UploadFile = File(...)) -> StreamingResponse
         pdf_content = converter.convert(epub_content)
         logger.info(f"Successfully converted EPUB to PDF ({len(pdf_content)} bytes)")
 
-        # Generate output filename
-        input_filename = Path(file.filename or "document").stem
-        output_filename = f"{input_filename}.pdf"
+        # Generate output filename with RFC 5987 UTF-8 support
+        original_filename = file.filename
+        disposition = get_disposition_header(original_filename)
 
         # Return PDF as streaming response
         return StreamingResponse(
             io.BytesIO(pdf_content),
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
+            headers={"Content-Disposition": disposition},
         )
 
     except HTTPException:
