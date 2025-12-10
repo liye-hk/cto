@@ -1,3 +1,13 @@
+---
+title: EPUB to PDF Converter
+emoji: 📄
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 # EPUB to PDF Converter
 
 A production-ready FastAPI service that converts EPUB files to PDF format with a modern web UI, robust error handling, comprehensive file validation, streaming responses, and full accessibility support.
