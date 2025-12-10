@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  epub-converter:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./app:/app/app
+      - ./static:/app/static
+      - ./templates:/app/templates
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    restart: unless-stopped

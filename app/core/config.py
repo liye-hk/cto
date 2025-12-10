@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     allowed_mime_types: list[str] = ["application/epub+zip", "application/zip"]
     allowed_extensions: list[str] = [".epub"]
 
+    # Server settings
+    port: int = 7860
+
     # Logging
     log_level: str = "INFO"
 
