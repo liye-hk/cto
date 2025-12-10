@@ -39,7 +39,7 @@ class EPUBToPDFConverter:
         font_paths = {
             'DejaVuSans': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
             'DejaVuSans-Bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-            'NotoSansCJK': '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
+            'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf'
         }
         
         for font_name, font_path in font_paths.items():
@@ -151,7 +151,7 @@ class EPUBToPDFConverter:
         body_style = ParagraphStyle(
             "CustomBody",
             parent=styles["Normal"],
-            fontName='DejaVuSans',
+            fontName='WenQuanYi',
             fontSize=11,
             alignment=4,
             spaceAfter=6,
@@ -203,7 +203,7 @@ class EPUBToPDFConverter:
         body_style = ParagraphStyle(
             "Body",
             parent=styles["Normal"],
-            fontName='DejaVuSans',
+            fontName='WenQuanYi',
             fontSize=11,
             alignment=4,
             spaceAfter=6,
