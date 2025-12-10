@@ -182,3 +182,50 @@ class TestEPUBToPDFConverter:
         assert isinstance(pdf_content, bytes)
         assert len(pdf_content) > 0
         assert pdf_content.startswith(b"%PDF")
+
+    def test_converter_with_chinese_japanese_content(self, converter):
+        """Test converter with Chinese and Japanese content."""
+        book = epub.EpubBook()
+        book.set_identifier("cjk-test")
+        book.set_title("中文测试 Japanese Test")
+        book.set_language("en")
+
+        c1 = epub.EpubHtml(
+            title="测试章节 Japanese Chapter",
+            file_name="chap_01.xhtml",
+            lang="en",
+        )
+        c1.content = """
+        <h1>Chinese Characters - 中文字符</h1>
+        <p>这是中文内容测试。这是一个测试段落，包含中文字符和English text mixed together.</p>
+        
+        <h2>Japanese Characters - 日本語文字</h2>
+        <p>これは日本語のテストです。日本語の文字をテストしています。</p>
+        
+        <h2>Emoji and Symbols - 表情符号和符号</h2>
+        <p>Testing emojis: 🎉🚀📚💻🌍 And special symbols: ©™®€£¥</p>
+        
+        <h2>Mixed Content</h2>
+        <p>Mixed: Hello 你好 こんにちは 🌍 Café naïve résumé</p>
+        
+        <h2>Special Unicode Characters</h2>
+        <p>Mathematical symbols: ∑∏∫√∞≈≠≤≥±</p>
+        <p>Greek letters: αβγδεζηθικλμνξοπρστυφχψω</p>
+        """
+
+        nav = epub.EpubNcx()
+
+        book.add_item(c1)
+        book.add_item(nav)
+        book.spine = [c1]
+        book.toc = (c1,)
+
+        epub_buffer = io.BytesIO()
+        epub.write_epub(epub_buffer, book, {})
+        epub_buffer.seek(0)
+
+        # Should not raise an exception with Unicode content
+        pdf_content = converter.convert(epub_buffer.getvalue())
+        assert isinstance(pdf_content, bytes)
+        assert len(pdf_content) > 0
+        assert pdf_content.startswith(b"%PDF")
