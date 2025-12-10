@@ -101,7 +101,18 @@ async def convert_epub_to_pdf(file: UploadFile = File(...)) -> StreamingResponse
 
         # Generate output filename
         input_filename = Path(file.filename or "document").stem
-        output_filename = f"{input_filename}.pdf"
+        
+        # Ensure filename is ASCII-safe to prevent latin-1 encoding errors in headers
+        # Remove any non-ASCII characters
+        safe_filename = input_filename.encode("ascii", "ignore").decode("ascii")
+        # Remove any leading/trailing whitespace or dots
+        safe_filename = safe_filename.strip().strip(".")
+        
+        # Fallback if filename becomes empty after sanitization
+        if not safe_filename:
+            safe_filename = "output"
+            
+        output_filename = f"{safe_filename}.pdf"
 
         # Return PDF as streaming response
         return StreamingResponse(
