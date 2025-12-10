@@ -144,7 +144,7 @@ class EPUBToPDFConverter:
             # Only process HTML/document items
             if isinstance(chapter, epub.EpubHtml):
                 try:
-                    content = chapter.get_content().decode("utf-8", errors="ignore")
+                    content = chapter.get_content().decode("utf-8", errors="replace")
                     html_elements = self._parse_html_content(content)
                     story.extend(html_elements)
                     story.append(PageBreak())
