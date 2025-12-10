@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Server settings
+    port: int = 7860  # Default port for Hugging Face Spaces
+
 
 settings = Settings()
 
