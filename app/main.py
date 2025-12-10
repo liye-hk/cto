@@ -1,7 +1,10 @@
 import logging
-from fastapi import FastAPI, HTTPException, status
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from app.core.config import settings
 from app.api.routes import router
@@ -23,8 +26,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Setup static files and templates
+BASE_DIR = Path(__file__).resolve().parent.parent
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
 # Include routers
 app.include_router(router)
+
+
+@app.get("/")
+async def home(request: Request):
+    """Serve the main upload UI page."""
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.exception_handler(HTTPException)

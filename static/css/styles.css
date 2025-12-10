@@ -1,0 +1,187 @@
+:root {
+    --primary-color: #0d6efd;
+    --success-color: #198754;
+    --danger-color: #dc3545;
+    --border-color: #dee2e6;
+    --hover-bg: #f8f9fa;
+}
+
+body {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px 0;
+}
+
+.container {
+    max-width: 1140px;
+}
+
+header h1 {
+    font-weight: 700;
+    color: #fff;
+}
+
+header .lead {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.card {
+    border: none;
+    border-radius: 15px;
+}
+
+/* Drop Zone Styles */
+.drop-zone {
+    border: 3px dashed var(--border-color);
+    border-radius: 10px;
+    padding: 50px 30px;
+    text-align: center;
+    background-color: var(--hover-bg);
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.drop-zone:hover,
+.drop-zone:focus {
+    border-color: var(--primary-color);
+    background-color: rgba(13, 110, 253, 0.05);
+    outline: none;
+}
+
+.drop-zone.drag-over {
+    border-color: var(--success-color);
+    background-color: rgba(25, 135, 84, 0.1);
+    transform: scale(1.02);
+}
+
+.drop-zone-content {
+    pointer-events: none;
+}
+
+.drop-zone i {
+    display: block;
+}
+
+/* File Info Styles */
+.file-info {
+    animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Button Styles */
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn:active {
+    transform: translateY(0);
+}
+
+.btn-lg {
+    padding: 12px 24px;
+    font-size: 1.1rem;
+}
+
+/* Progress Section */
+#progressSection {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.spinner-border {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+/* Alert Styles */
+.alert {
+    border-radius: 8px;
+    border: none;
+}
+
+/* Download Section */
+#downloadSection {
+    animation: slideUp 0.5s ease;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Footer */
+footer {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Accessibility */
+.drop-zone:focus-visible {
+    outline: 3px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible {
+    outline: 3px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .drop-zone {
+        padding: 30px 20px;
+    }
+
+    header h1 {
+        font-size: 2rem;
+    }
+
+    .btn-lg {
+        font-size: 1rem;
+        padding: 10px 20px;
+    }
+}
+
+/* Screen Reader Only */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
