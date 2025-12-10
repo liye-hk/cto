@@ -47,11 +47,31 @@ def create_test_epub() -> bytes:
 class TestConvertEndpoint:
     """Test suite for the /api/convert endpoint."""
 
+    def test_home_page(self, client):
+        """Test home page returns HTML."""
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert b"EPUB to PDF Converter" in response.content
+        assert b"dropZone" in response.content
+
     def test_health_check(self, client):
         """Test health check endpoint."""
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "healthy"
+
+    def test_static_files_js(self, client):
+        """Test static JavaScript file is accessible."""
+        response = client.get("/static/js/app.js")
+        assert response.status_code == 200
+        assert b"selectedFile" in response.content
+
+    def test_static_files_css(self, client):
+        """Test static CSS file is accessible."""
+        response = client.get("/static/css/styles.css")
+        assert response.status_code == 200
+        assert b"drop-zone" in response.content
 
     def test_convert_valid_epub(self, client):
         """Test converting a valid EPUB file."""

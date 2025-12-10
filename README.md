@@ -1,14 +1,22 @@
-# EPUB to PDF Converter API
+# EPUB to PDF Converter
 
-A FastAPI service that converts EPUB files to PDF format with robust error handling, file validation, and streaming responses.
+A FastAPI service that converts EPUB files to PDF format with a modern web UI, robust error handling, file validation, and streaming responses.
 
 ## Features
 
+- **Modern Web UI**: 
+  - Bootstrap-based responsive interface
+  - Drag-and-drop file upload zone
+  - Real-time file validation
+  - Progress indicators during conversion
+  - Direct PDF download without page reload
+  - Full accessibility support with ARIA labels
 - **EPUB to PDF Conversion**: Convert EPUB files to PDF using ebooklib and reportlab
 - **File Validation**: 
-  - MIME type validation (application/epub+zip, application/zip)
+  - Client-side validation for EPUB files
+  - Server-side MIME type validation (application/epub+zip, application/zip)
   - File extension validation (.epub)
-  - Configurable file size limits
+  - Configurable file size limits (50MB default)
 - **Streaming Responses**: PDF files are streamed back with proper headers and attachment filename
 - **Error Handling**: Comprehensive error handling with meaningful JSON error responses
 - **Logging**: Built-in logging for debugging and monitoring
@@ -65,7 +73,26 @@ uvicorn app.main:app --reload
 
 The API will be available at `http://localhost:8000`
 
+The web UI will be accessible at the root URL.
+
+## User Interface
+
+Visit `http://localhost:8000` in your browser to access the web interface:
+
+1. **Upload**: Drag and drop an EPUB file or click to browse
+2. **Validate**: Client-side validation ensures only .epub files up to 50MB
+3. **Convert**: Click "Convert to PDF" to start the conversion
+4. **Download**: Download your PDF directly when conversion completes
+
+The UI is fully stateless and does not require any backend storage.
+
 ## API Endpoints
+
+### Home Page
+```
+GET /
+```
+Serves the web UI for EPUB to PDF conversion.
 
 ### Health Check
 ```
@@ -124,6 +151,13 @@ pytest tests/ --cov=app --cov-report=html
 │   └── services/
 │       ├── __init__.py
 │       └── converter.py        # EPUB to PDF conversion logic
+├── static/
+│   ├── css/
+│   │   └── styles.css          # Custom CSS styles
+│   └── js/
+│       └── app.js              # Frontend JavaScript
+├── templates/
+│   └── index.html              # Main UI template
 ├── tests/
 │   ├── __init__.py
 │   ├── test_api.py            # API endpoint tests
@@ -169,11 +203,16 @@ Common error scenarios:
 - **reportlab**: PDF generation library
 - **python-multipart**: Multipart form data parsing
 - **pydantic**: Data validation
+- **jinja2**: Template rendering
 
 ### Development Dependencies
 - **pytest**: Testing framework
 - **pytest-asyncio**: Async test support
 - **httpx**: HTTP client for testing
+
+### Frontend Dependencies (CDN)
+- **Bootstrap 5.3.2**: UI framework
+- **Bootstrap Icons**: Icon library
 
 ## Performance Notes
 
