@@ -1,5 +1,6 @@
 import io
 import logging
+import os
 import re
 from typing import Optional
 
@@ -8,6 +9,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from html import unescape
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,44 @@ class EPUBToPDFConverter:
 
     def __init__(self):
         self.logger = logger
+        self._setup_unicode_fonts()
+
+    def _setup_unicode_fonts(self):
+        """Setup Unicode-compatible fonts for PDF generation."""
+        try:
+            # Common font paths for Unicode support
+            font_paths = [
+                # Linux/Unix systems
+                '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+                '/usr/share/fonts/TTF/DejaVuSans.ttf',
+                # macOS
+                '/System/Library/Fonts/Arial.ttf',
+                '/Library/Fonts/Arial.ttf',
+                # Windows
+                'C:\\Windows\\Fonts\\arial.ttf',
+                'C:\\Windows\\Fonts\\calibri.ttf',
+            ]
+            
+            # Try to find and register a Unicode font
+            font_registered = False
+            for font_path in font_paths:
+                if os.path.exists(font_path):
+                    try:
+                        pdfmetrics.registerFont(TTFont('UnicodeSans', font_path))
+                        self.logger.info(f"Registered Unicode font: {font_path}")
+                        font_registered = True
+                        break
+                    except Exception as e:
+                        self.logger.warning(f"Failed to register font {font_path}: {e}")
+                        continue
+            
+            if not font_registered:
+                self.logger.warning("No Unicode fonts found, using default fonts")
+                
+        except Exception as e:
+            self.logger.warning(f"Font setup error: {e}")
+            # Continue without Unicode font - reportlab will handle as best as possible
 
     def convert(self, epub_content: bytes) -> bytes:
         """
@@ -56,6 +97,16 @@ class EPUBToPDFConverter:
 
             # Build story with EPUB content
             story = self._extract_epub_content(epub_book)
+            
+            # Use Unicode font if available
+            available_fonts = pdfmetrics.getRegisteredFontNames()
+            font_name = 'UnicodeSans' if 'UnicodeSans' in available_fonts else 'Helvetica'
+            
+            # Update all paragraph styles to use Unicode font
+            for element in story:
+                if hasattr(element, 'style') and element.style:
+                    element.style.fontName = font_name
+            
             doc.build(story)
 
             self.logger.info("PDF generated successfully")
@@ -101,6 +152,11 @@ class EPUBToPDFConverter:
         """
         story = []
         styles = getSampleStyleSheet()
+        
+        # Use Unicode font if available
+        available_fonts = pdfmetrics.getRegisteredFontNames()
+        font_name = 'UnicodeSans' if 'UnicodeSans' in available_fonts else 'Helvetica'
+        
         title_style = ParagraphStyle(
             "CustomTitle",
             parent=styles["Heading1"],
@@ -108,6 +164,7 @@ class EPUBToPDFConverter:
             textColor="black",
             spaceAfter=12,
             alignment=1,
+            fontName=font_name,
         )
         heading_style = ParagraphStyle(
             "CustomHeading",
@@ -115,6 +172,7 @@ class EPUBToPDFConverter:
             fontSize=14,
             textColor="black",
             spaceAfter=10,
+            fontName=font_name,
         )
         body_style = ParagraphStyle(
             "CustomBody",
@@ -122,6 +180,7 @@ class EPUBToPDFConverter:
             fontSize=11,
             alignment=4,
             spaceAfter=6,
+            fontName=font_name,
         )
 
         # Add book title if available
@@ -167,12 +226,17 @@ class EPUBToPDFConverter:
         elements = []
         styles = getSampleStyleSheet()
 
+        # Use Unicode font if available
+        available_fonts = pdfmetrics.getRegisteredFontNames()
+        font_name = 'UnicodeSans' if 'UnicodeSans' in available_fonts else 'Helvetica'
+
         body_style = ParagraphStyle(
             "Body",
             parent=styles["Normal"],
             fontSize=11,
             alignment=4,
             spaceAfter=6,
+            fontName=font_name,
         )
 
         heading_style = ParagraphStyle(
@@ -181,6 +245,7 @@ class EPUBToPDFConverter:
             fontSize=14,
             textColor="black",
             spaceAfter=10,
+            fontName=font_name,
         )
 
         # Simple HTML parsing - extract text content and basic structure
