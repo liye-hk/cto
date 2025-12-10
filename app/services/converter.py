@@ -50,6 +50,21 @@ class EPUBToPDFConverter:
                 except Exception as e:
                     self.logger.warning(f"Failed to register font {font_name}: {str(e)}")
         
+        # Register WenQuanYi font family with all variants
+        # WenQuanYi is a monotype font, so we use the same font for all variants
+        wqy_font_path = '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf'
+        if os.path.exists(wqy_font_path):
+            try:
+                pdfmetrics.registerFontFamily('WenQuanYi',
+                    normal='WenQuanYi',
+                    bold='WenQuanYi',
+                    italic='WenQuanYi',
+                    boldItalic='WenQuanYi'
+                )
+                self.logger.info("Successfully registered WenQuanYi font family")
+            except Exception as e:
+                self.logger.warning(f"Failed to register WenQuanYi font family: {str(e)}")
+        
         self.fonts_registered = True
 
     def convert(self, epub_content: bytes) -> bytes:
