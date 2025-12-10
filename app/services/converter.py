@@ -1,5 +1,6 @@
 import io
 import logging
+import os
 import re
 from typing import Optional
 
@@ -8,6 +9,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from html import unescape
 
 logger = logging.getLogger(__name__)
@@ -24,6 +27,30 @@ class EPUBToPDFConverter:
 
     def __init__(self):
         self.logger = logger
+        self.fonts_registered = False
+
+    def _register_unicode_fonts(self):
+        """
+        Register Unicode-capable fonts for PDF generation.
+        """
+        if self.fonts_registered:
+            return
+        
+        font_paths = {
+            'DejaVuSans': '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            'DejaVuSans-Bold': '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            'NotoSansCJK': '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
+        }
+        
+        for font_name, font_path in font_paths.items():
+            if os.path.exists(font_path):
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, font_path))
+                    self.logger.info(f"Successfully registered font: {font_name}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to register font {font_name}: {str(e)}")
+        
+        self.fonts_registered = True
 
     def convert(self, epub_content: bytes) -> bytes:
         """
@@ -39,6 +66,9 @@ class EPUBToPDFConverter:
             ConversionError: If conversion fails
         """
         try:
+            # Register Unicode fonts
+            self._register_unicode_fonts()
+            
             # Parse EPUB
             epub_book = self._parse_epub(epub_content)
             self.logger.info(f"Successfully parsed EPUB with {len(epub_book.spine)} chapters")
@@ -104,6 +134,7 @@ class EPUBToPDFConverter:
         title_style = ParagraphStyle(
             "CustomTitle",
             parent=styles["Heading1"],
+            fontName='DejaVuSans-Bold',
             fontSize=24,
             textColor="black",
             spaceAfter=12,
@@ -112,6 +143,7 @@ class EPUBToPDFConverter:
         heading_style = ParagraphStyle(
             "CustomHeading",
             parent=styles["Heading2"],
+            fontName='DejaVuSans-Bold',
             fontSize=14,
             textColor="black",
             spaceAfter=10,
@@ -119,6 +151,7 @@ class EPUBToPDFConverter:
         body_style = ParagraphStyle(
             "CustomBody",
             parent=styles["Normal"],
+            fontName='DejaVuSans',
             fontSize=11,
             alignment=4,
             spaceAfter=6,
@@ -170,6 +203,7 @@ class EPUBToPDFConverter:
         body_style = ParagraphStyle(
             "Body",
             parent=styles["Normal"],
+            fontName='DejaVuSans',
             fontSize=11,
             alignment=4,
             spaceAfter=6,
@@ -178,6 +212,7 @@ class EPUBToPDFConverter:
         heading_style = ParagraphStyle(
             "Heading",
             parent=styles["Heading2"],
+            fontName='DejaVuSans-Bold',
             fontSize=14,
             textColor="black",
             spaceAfter=10,
