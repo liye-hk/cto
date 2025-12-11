@@ -24,11 +24,14 @@ ALLOWED_INLINE_TAG_PATTERN = re.compile(
     r'(?i)(</?(?:b|strong|i|em|u|font)(?:\s+[^<>]*?)?>|<br\s*/?>)'
 )
 
-# Safe maximum image dimensions (smaller than page limits)
-MAX_IMG_WIDTH = 6.0 * inch  # 6 inches (safer than full page width)
-MAX_IMG_HEIGHT = 8.0 * inch  # 8 inches (safer than full page height)
-DEFAULT_IMAGE_WIDTH = 4 * inch
-DEFAULT_IMAGE_HEIGHT = 3 * inch
+# Constants for dimension conversion
+PIXELS_TO_POINTS = 72.0 / 96.0  # 96 DPI assumption
+
+# Safe maximum image dimensions (in inches, not points)
+MAX_IMG_WIDTH = 6.0  # 6 inches (safer than full page width)
+MAX_IMG_HEIGHT = 8.0  # 8 inches (safer than full page height)
+DEFAULT_IMAGE_WIDTH = 4.0  # inches
+DEFAULT_IMAGE_HEIGHT = 3.0  # inches
 
 _FONTS_INITIALIZED = False
 
@@ -298,9 +301,9 @@ def parse_dimension(dim_str: Optional[str]) -> Optional[float]:
     if unit == 'mm':
         return value * 2.835
     if unit == 'in':
-        return value * 72
+        return value * inch
     if unit == '%':
-        return (value / 100.0) * MAX_IMAGE_WIDTH
+        return (value / 100.0) * MAX_IMG_WIDTH * inch  # Convert percentage of max width to points
     return None
 
 
@@ -451,12 +454,24 @@ class EPUBToPDFConverter:
             self.logger.info("Processing chapters...")
             chapters_processed = 0
             images_added = 0
+            center_count = 0
+            bold_count = 0
+            color_count = 0
 
             for item in epub_book.spine:
                 item_id = item[0] if isinstance(item, tuple) else item
 
                 try:
+                    # Try to get chapter by ID first
                     chapter = epub_book.get_item_with_id(item_id)
+                    
+                    # If not found by ID, try to find by filename (common issue with EpubHtml)
+                    if chapter is None:
+                        for book_item in epub_book.get_items():
+                            if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
+                                chapter = book_item
+                                break
+                    
                     if chapter is None or not isinstance(chapter, epub.EpubHtml):
                         continue
 
@@ -497,25 +512,30 @@ class EPUBToPDFConverter:
                                             pil_width, pil_height = img_pil.size
                                             
                                             # Convert pixels to inches (assume 96 dpi)
-                                            width = pil_width / 96.0 * inch
-                                            height = pil_height / 96.0 * inch
+                                            # Formula: inches = pixels / 96
+                                            width_inches = pil_width / 96.0
+                                            height_inches = pil_height / 96.0
                                             
-                                            self.logger.info(f"Image original size: {pil_width}x{pil_height}px ({width:.1f}x{height:.1f}in)")
+                                            self.logger.info(f"Image original: {pil_width}x{pil_height}px = {width_inches:.1f}x{height_inches:.1f}in")
                                         except Exception as e:
                                             self.logger.warning(f"Could not read image dimensions: {e}, using default")
-                                            width = DEFAULT_IMAGE_WIDTH
-                                            height = DEFAULT_IMAGE_HEIGHT
+                                            width_inches = DEFAULT_IMAGE_WIDTH
+                                            height_inches = DEFAULT_IMAGE_HEIGHT
                                         
                                         # Scale down if exceeds safe limits
-                                        if width > MAX_IMG_WIDTH or height > MAX_IMG_HEIGHT:
+                                        if width_inches > MAX_IMG_WIDTH or height_inches > MAX_IMG_HEIGHT:
                                             # Calculate scale factor
-                                            scale_w = MAX_IMG_WIDTH / width if width > MAX_IMG_WIDTH else 1.0
-                                            scale_h = MAX_IMG_HEIGHT / height if height > MAX_IMG_HEIGHT else 1.0
+                                            scale_w = MAX_IMG_WIDTH / width_inches if width_inches > MAX_IMG_WIDTH else 1.0
+                                            scale_h = MAX_IMG_HEIGHT / height_inches if height_inches > MAX_IMG_HEIGHT else 1.0
                                             scale = min(scale_w, scale_h)
                                             
-                                            width = width * scale
-                                            height = height * scale
-                                            self.logger.info(f"Scaled image to: {width:.1f}x{height:.1f}in")
+                                            width_inches = width_inches * scale
+                                            height_inches = height_inches * scale
+                                            self.logger.info(f"Scaled to: {width_inches:.1f}x{height_inches:.1f}in")
+                                        
+                                        # Convert back to points for reportlab
+                                        width = width_inches * inch
+                                        height = height_inches * inch
                                         
                                         image_buffer = io.BytesIO(raw_img)
                                         img = RLImage(image_buffer, width=width, height=height)
@@ -543,6 +563,14 @@ class EPUBToPDFConverter:
 
                                 alignment = get_alignment(attrs)
 
+                                # Check for formatting in text content
+                                if '<b>' in safe_data or '<strong>' in safe_data:
+                                    bold_count += 1
+                                    self.logger.info(f"✓ Bold text: {safe_data[:50]}")
+                                if '<font color' in safe_data:
+                                    color_count += 1
+                                    self.logger.info(f"✓ Color text: {safe_data[:50]}")
+
                                 if elem_type == 'h1':
                                     style = ParagraphStyle('H1Temp', parent=styles['CJKHeading1'], alignment=alignment)
                                     story.append(Paragraph(safe_data, style))
@@ -556,6 +584,10 @@ class EPUBToPDFConverter:
                                     style = ParagraphStyle('ListTemp', parent=styles['CJKList'], alignment=alignment)
                                     story.append(Paragraph(f"<b>•</b> {safe_data}", style))
                                 else:
+                                    if alignment == TA_CENTER:
+                                        center_count += 1
+                                        self.logger.info(f"✓ Center text: {safe_data[:50]}")
+                                    
                                     body_kwargs = {'alignment': alignment}
                                     if alignment in (TA_CENTER, TA_RIGHT):
                                         body_kwargs['firstLineIndent'] = 0
@@ -571,7 +603,7 @@ class EPUBToPDFConverter:
                     continue
 
             self.logger.info(
-                f"Conversion complete: {chapters_processed} chapters, {images_added} images added"
+                f"Summary: {chapters_processed} chapters, {images_added} images, {center_count} centered, {bold_count} bold, {color_count} colored"
             )
 
             doc.build(story)
