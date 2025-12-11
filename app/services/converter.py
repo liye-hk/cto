@@ -13,8 +13,16 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
-from reportlab.lib.utils import ImageReader
-from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer, Image as RLImage
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    PageTemplate,
+    NextPageTemplate,
+    Paragraph,
+    PageBreak,
+    Spacer,
+    Image as RLImage,
+)
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -32,6 +40,12 @@ MAX_IMG_WIDTH = 6.0  # 6 inches (safer than full page width)
 MAX_IMG_HEIGHT = 8.0  # 8 inches (safer than full page height)
 DEFAULT_IMAGE_WIDTH = 4.0  # inches
 DEFAULT_IMAGE_HEIGHT = 3.0  # inches
+
+# Content page margin definitions
+CONTENT_LEFT_MARGIN = inch
+CONTENT_RIGHT_MARGIN = inch
+CONTENT_TOP_MARGIN = 0.5 * inch
+CONTENT_BOTTOM_MARGIN = 0.5 * inch
 
 _FONTS_INITIALIZED = False
 
@@ -414,13 +428,9 @@ class EPUBToPDFConverter:
             epub_images = self._extract_images(epub_book)
 
             pdf_buffer = io.BytesIO()
-            doc = SimpleDocTemplate(
-                pdf_buffer,
-                pagesize=letter,
-                topMargin=0.5 * inch,
-                bottomMargin=0.5 * inch,
-            )
             story = []
+            title_flowables: List = []
+            title_inserted = False
 
             wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
             font_name = 'WenQuanYi' if wqy_registered else 'Helvetica'
@@ -485,8 +495,10 @@ class EPUBToPDFConverter:
                     if isinstance(title_text, (tuple, list)):
                         title_text = title_text[0]
                     if title_text:
-                        story.append(Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading1']))
-                        story.append(Spacer(1, 0.3 * inch))
+                        title_flowables.extend([
+                            Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading1']),
+                            Spacer(1, 0.3 * inch),
+                        ])
                 except Exception as e:
                     self.logger.warning(f"Skipped title: {str(e)}")
 
@@ -496,6 +508,7 @@ class EPUBToPDFConverter:
             center_count = 0
             bold_count = 0
             color_count = 0
+            cover_detected = False
 
             for item in epub_book.spine:
                 item_id = item[0] if isinstance(item, tuple) else item
@@ -520,6 +533,74 @@ class EPUBToPDFConverter:
                     extractor = FormattingPreservingExtractor()
                     extractor.feed(content)
                     extractor.close()
+
+                    chapter_has_images = any(
+                        element and element[0] == 'img'
+                        for element in extractor.elements
+                    )
+                    chapter_has_text = any(
+                        element
+                        and element[0] != 'img'
+                        and isinstance(element[1], str)
+                        and re.sub(r'<[^>]+>', '', element[1]).strip()
+                        for element in extractor.elements
+                    )
+                    is_cover_candidate = (
+                        chapters_processed == 1
+                        and chapter_has_images
+                        and not chapter_has_text
+                    )
+
+                    if is_cover_candidate and not cover_detected:
+                        self.logger.info("Detected image-only first chapter; using it as cover page")
+                        cover_added = False
+                        for element in extractor.elements:
+                            if not element or element[0] != 'img':
+                                continue
+
+                            img_data = element[1] if len(element) > 1 else {}
+                            if not isinstance(img_data, dict):
+                                continue
+
+                            img_src = (img_data.get('src') or '').replace('../', '')
+                            img_name = img_src.split('/')[-1]
+                            if not img_name:
+                                continue
+
+                            for epub_img_name, raw_img in epub_images.items():
+                                if img_name not in epub_img_name and not epub_img_name.endswith(img_name):
+                                    continue
+
+                                try:
+                                    image_buffer = io.BytesIO(raw_img)
+                                    full_width, full_height = letter
+                                    img = RLImage(
+                                        image_buffer,
+                                        width=full_width,
+                                        height=full_height,
+                                    )
+                                    story.append(img)
+                                    story.append(NextPageTemplate('Content'))
+                                    story.append(PageBreak())
+                                    images_added += 1
+                                    cover_detected = True
+                                    cover_added = True
+                                    self.logger.info(f"✓ Cover image fills first page: {epub_img_name}")
+                                    break
+                                except Exception as e:
+                                    self.logger.error(f"✗ Failed to add cover image {epub_img_name}: {e}")
+
+                            if cover_added:
+                                break
+
+                        if cover_added:
+                            continue
+                        else:
+                            self.logger.warning("Cover chapter detected but no matching image found; falling back to standard layout")
+
+                    if title_flowables and not title_inserted:
+                        story.extend(title_flowables)
+                        title_inserted = True
 
                     for element in extractor.elements:
                         try:
@@ -640,6 +721,45 @@ class EPUBToPDFConverter:
                 except Exception as e:
                     self.logger.error(f"Error in chapter {item_id}: {e}")
                     continue
+
+            if title_flowables and not title_inserted:
+                story.extend(title_flowables)
+                title_inserted = True
+
+            doc = BaseDocTemplate(pdf_buffer, pagesize=letter)
+
+            content_frame = Frame(
+                CONTENT_LEFT_MARGIN,
+                CONTENT_BOTTOM_MARGIN,
+                letter[0] - CONTENT_LEFT_MARGIN - CONTENT_RIGHT_MARGIN,
+                letter[1] - CONTENT_TOP_MARGIN - CONTENT_BOTTOM_MARGIN,
+                leftPadding=0,
+                bottomPadding=0,
+                rightPadding=0,
+                topPadding=0,
+                id='content_frame',
+            )
+
+            if cover_detected:
+                cover_frame = Frame(
+                    0,
+                    0,
+                    letter[0],
+                    letter[1],
+                    leftPadding=0,
+                    bottomPadding=0,
+                    rightPadding=0,
+                    topPadding=0,
+                    id='cover_frame',
+                )
+                doc.addPageTemplates([
+                    PageTemplate(id='Cover', frames=[cover_frame]),
+                    PageTemplate(id='Content', frames=[content_frame]),
+                ])
+            else:
+                doc.addPageTemplates([
+                    PageTemplate(id='Content', frames=[content_frame]),
+                ])
 
             self.logger.info(
                 f"Summary: {chapters_processed} chapters, {images_added} images, {center_count} centered, {bold_count} bold, {color_count} colored"
