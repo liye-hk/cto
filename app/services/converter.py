@@ -1,7 +1,7 @@
 import io
 import logging
 import os
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional, Union
 from html.parser import HTMLParser
 from html import escape
 
@@ -78,25 +78,47 @@ def _initialize_fonts():
 _initialize_fonts()
 
 
-class ImageExtractor(HTMLParser):
-    """Simple parser to collect inline text and image sources."""
-
+class TextAndImageExtractor(HTMLParser):
+    """Extract text with structure info and images"""
     def __init__(self):
         super().__init__()
-        self.images: List[str] = []
-        self.text_chunks: List[str] = []
-
+        self.elements = []
+        self.current_text = []
+        self.current_tag = None
+    
     def handle_starttag(self, tag, attrs):
-        if tag == 'img':
+        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            self._flush_text()
+            self.current_tag = tag
+        elif tag == 'p':
+            self._flush_text()
+            self.current_tag = 'p'
+        elif tag in ['li', 'ul', 'ol']:
+            self._flush_text()
+            self.current_tag = tag
+        elif tag == 'img':
+            self._flush_text()
             attrs_dict = dict(attrs)
             src = attrs_dict.get('src', '')
             if src:
-                self.images.append(src)
-
+                self.elements.append(('img', src))
+    
     def handle_data(self, data):
-        stripped = data.strip()
-        if stripped:
-            self.text_chunks.append(stripped)
+        text = data.strip()
+        if text:
+            self.current_text.append(text)
+    
+    def handle_endtag(self, tag):
+        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li']:
+            self._flush_text()
+            self.current_tag = None
+    
+    def _flush_text(self):
+        if self.current_text:
+            text = ' '.join(self.current_text).strip()
+            if text:
+                self.elements.append((self.current_tag or 'p', text))
+            self.current_text = []
 
 
 class ConversionError(Exception):
@@ -126,9 +148,9 @@ class EPUBToPDFConverter:
         try:
             # Parse EPUB
             epub_book = self._parse_epub(epub_content)
-            self.logger.info(f"Successfully parsed EPUB with {len(epub_book.spine)} chapters")
+            self.logger.info("EPUB loaded")
             
-            # Extract images from EPUB with logging
+            # Extract images from EPUB with minimal logging
             epub_images = self._extract_images(epub_book)
 
             # Create PDF in memory
@@ -143,74 +165,81 @@ class EPUBToPDFConverter:
 
             # Check if CJK fonts were successfully registered
             wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
+            font_name = 'WenQuanYi' if wqy_registered else 'Helvetica'
+            # If we didn't register family for Helvetica (built-in), we might need direct font names, 
+            # but Helvetica is standard.
             
             styles = getSampleStyleSheet()
-            if wqy_registered:
-                # Define styles using WenQuanYi
-                styles.add(ParagraphStyle(
-                    'CJKBody',
-                    fontName='WenQuanYi',
-                    fontSize=11,
-                    leading=14,
-                    spaceAfter=8,
-                ))
-                styles.add(ParagraphStyle(
-                    'CJKHeading',
-                    fontName='WenQuanYi',
-                    fontBold=True,
-                    fontSize=16,
-                    leading=20,
-                    spaceAfter=12,
-                    textColor=colors.HexColor('#333333'),
-                ))
-                styles.add(ParagraphStyle(
-                    'CJKList',
-                    fontName='WenQuanYi',
-                    fontSize=11,
-                    leading=14,
-                    leftIndent=20,
-                    spaceAfter=6,
-                ))
-                self.logger.info("Using WenQuanYi CJK fonts for PDF generation")
-            else:
-                # Fallback styles
-                styles.add(ParagraphStyle(
-                    'CJKBody',
-                    fontName='Helvetica',
-                    fontSize=11,
-                    leading=14,
-                    spaceAfter=8,
-                ))
-                styles.add(ParagraphStyle(
-                    'CJKHeading',
-                    fontName='Helvetica-Bold',
-                    fontSize=16,
-                    leading=20,
-                    spaceAfter=12,
-                    textColor=colors.HexColor('#333333'),
-                ))
-                styles.add(ParagraphStyle(
-                    'CJKList',
-                    fontName='Helvetica',
-                    fontSize=11,
-                    leading=14,
-                    leftIndent=20,
-                    spaceAfter=6,
-                ))
+            
+            # Define formatted styles
+            styles.add(ParagraphStyle(
+                'CJKHeading1',
+                fontName=font_name,
+                fontSize=18,
+                leading=22,
+                spaceAfter=12,
+                spaceBefore=12,
+                textColor=colors.HexColor('#000000'),
+                fontBold=True
+            ))
+            
+            styles.add(ParagraphStyle(
+                'CJKHeading2',
+                fontName=font_name,
+                fontSize=16,
+                leading=20,
+                spaceAfter=10,
+                spaceBefore=10,
+                fontBold=True
+            ))
+            
+            styles.add(ParagraphStyle(
+                'CJKHeading3',
+                fontName=font_name,
+                fontSize=14,
+                leading=18,
+                spaceAfter=8,
+                spaceBefore=8,
+                fontBold=True
+            ))
+            
+            styles.add(ParagraphStyle(
+                'CJKBody',
+                fontName=font_name,
+                fontSize=11,
+                leading=16,
+                spaceAfter=6,
+                alignment=4,  # Justify
+            ))
+            
+            styles.add(ParagraphStyle(
+                'CJKList',
+                fontName=font_name,
+                fontSize=11,
+                leading=14,
+                leftIndent=20,
+                spaceAfter=4,
+            ))
+            
+            if not wqy_registered:
                 self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
 
             # Add book title if available
             if epub_book.title:
                 try:
                     title_text = epub_book.title
-                    if isinstance(title_text, tuple) or isinstance(title_text, list):
+                    if isinstance(title_text, (tuple, list)):
                         title_text = title_text[0]
                     
                     if title_text:
-                        story.append(Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading']))
+                        story.append(Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading1']))
                         story.append(Spacer(1, 0.3 * inch))
                 except Exception as e:
                     self.logger.warning(f"Skipped title: {str(e)}")
+
+            self.logger.info("Processing chapters...")
+            chapters_processed = 0
+            images_added = 0
 
             # Process chapters
             for item in epub_book.spine:
@@ -229,53 +258,69 @@ class EPUBToPDFConverter:
                     if not isinstance(chapter, epub.EpubHtml):
                         continue
                     
+                    chapters_processed += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
-                    extractor = ImageExtractor()
+                    
+                    # Extract structured content
+                    extractor = TextAndImageExtractor()
                     extractor.feed(content)
 
-                    # Simple text aggregation for chapter content
-                    if extractor.text_chunks:
-                        text = ' '.join(extractor.text_chunks)[:1000]
-                        if text:
-                            try:
-                                paragraph = Paragraph(self._escape_text(text), styles['CJKBody'])
-                                story.append(paragraph)
-                                story.append(Spacer(1, 0.1 * inch))
-                            except Exception as e:
-                                chapter_name = getattr(chapter, 'file_name', item_id)
-                                self.logger.warning(f"Failed to add text for {chapter_name}: {e}")
-
-                    # Try to embed images found in chapter
-                    for img_src in extractor.images:
-                        img_name = img_src.replace('../', '').split('/')[-1]
-                        self.logger.info(f"Looking for image: {img_name}")
-                        matched_image = False
-
-                        for epub_img_name, img_data in epub_images.items():
-                            if img_name and (img_name in epub_img_name or epub_img_name in img_name):
-                                matched_image = True
-                                try:
-                                    img_buffer = io.BytesIO(img_data)
-                                    img = Image(img_buffer, width=3 * inch, height=2 * inch)
-                                    story.append(img)
-                                    story.append(Spacer(1, 0.2 * inch))
-                                    self.logger.info(f"Added image: {epub_img_name}")
-                                except Exception as e:
-                                    self.logger.error(f"Failed to add image {epub_img_name}: {e}")
-                                break
-
-                        if not matched_image:
-                            self.logger.warning(f"Image not found in EPUB assets: {img_name}")
+                    # Add elements to PDF
+                    for elem_type, elem_data in extractor.elements:
+                        try:
+                            # Escape text content
+                            safe_data = self._escape_text(elem_data)
+                            
+                            if elem_type == 'h1':
+                                p = Paragraph(safe_data, styles['CJKHeading1'])
+                                story.append(p)
+                            elif elem_type == 'h2':
+                                p = Paragraph(safe_data, styles['CJKHeading2'])
+                                story.append(p)
+                            elif elem_type in ['h3', 'h4', 'h5', 'h6']:
+                                p = Paragraph(safe_data, styles['CJKHeading3'])
+                                story.append(p)
+                            elif elem_type == 'li':
+                                p = Paragraph(f"• {safe_data}", styles['CJKList'])
+                                story.append(p)
+                            elif elem_type == 'img':
+                                img_name = elem_data.replace('../', '').split('/')[-1]
+                                found_img = False
+                                for epub_img_name, img_data in epub_images.items():
+                                    if img_name and (img_name in epub_img_name or epub_img_name.endswith(img_name)):
+                                        try:
+                                            img_buffer = io.BytesIO(img_data)
+                                            # Using fixed size for now as per reference implementation
+                                            img = Image(img_buffer, width=4*inch, height=3*inch)
+                                            story.append(img)
+                                            story.append(Spacer(1, 0.15*inch))
+                                            images_added += 1
+                                            self.logger.info(f"Added image to PDF: {epub_img_name}")
+                                            found_img = True
+                                            break
+                                        except Exception as e:
+                                            self.logger.warning(f"Could not add image {epub_img_name}: {e}")
+                                
+                                if not found_img:
+                                    # Debug log only
+                                    pass
+                            else:  # Regular paragraph
+                                p = Paragraph(safe_data, styles['CJKBody'])
+                                story.append(p)
+                                story.append(Spacer(1, 0.08*inch))
+                        except Exception as e:
+                            self.logger.warning(f"Failed to add element: {e}")
 
                     story.append(PageBreak())
                     
                 except Exception as e:
-                    self.logger.warning(f"Failed to process chapter: {e}")
+                    self.logger.error(f"Error in chapter {item_id}: {e}")
                     continue
+
+            self.logger.info(f"Conversion complete: {chapters_processed} chapters, {images_added} images added")
 
             # Build the PDF
             doc.build(story)
-            self.logger.info("PDF generated successfully")
             pdf_buffer.seek(0)
             return pdf_buffer.getvalue()
 
@@ -288,15 +333,6 @@ class EPUBToPDFConverter:
     def _parse_epub(self, epub_content: bytes) -> epub.EpubBook:
         """
         Parse EPUB content.
-
-        Args:
-            epub_content: Raw bytes of the EPUB file
-
-        Returns:
-            Parsed EpubBook object
-
-        Raises:
-            ConversionError: If EPUB parsing fails
         """
         try:
             epub_buffer = io.BytesIO(epub_content)
@@ -311,6 +347,7 @@ class EPUBToPDFConverter:
         Extract all images from EPUB book, keyed by the original item name.
         """
         images: Dict[str, bytes] = {}
+        image_count = 0
         for item in book.get_items():
             item_type = item.get_type()
             is_image = item_type == ebooklib.ITEM_IMAGE
@@ -326,14 +363,15 @@ class EPUBToPDFConverter:
             if is_image:
                 name = item.get_name()
                 images[name] = item.get_content()
-                self.logger.info(f"Found image: {name}")
+                image_count += 1
+                # Disabled verbose logging as per requirement
+                # self.logger.info(f"Found image: {name}")
 
-        self.logger.info(f"Total images found: {len(images)}")
+        self.logger.info(f"Found {image_count} images in EPUB")
         return images
 
     def _escape_text(self, text: str) -> str:
         """
         Escape special characters for reportlab.
-        Using html.escape is preferred now but keeping this for compatibility/fallback usage.
         """
         return escape(text)
