@@ -28,7 +28,8 @@ class TestEPUBToPDFConverter:
         book.spine = [("chapter1.xhtml", True)]
         
         # Create NCX navigation
-        book.toc = [epub.EpubNcx()]
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
         
         # Write EPUB to bytes
         epub_buffer = io.BytesIO()
@@ -60,9 +61,9 @@ class TestEPUBToPDFConverter:
         escaped = converter._escape_text(text)
 
         # Should escape the special characters
-        assert "&" in escaped
-        assert "<" in escaped
-        assert ">" in escaped
+        assert "&amp;" in escaped
+        assert "&lt;" in escaped
+        assert "&gt;" in escaped
         # Check that the text content is preserved (escaped)
         assert "Text with" in escaped
         assert "special" in escaped
@@ -79,7 +80,8 @@ class TestEPUBToPDFConverter:
         chapter.content = "<h1>测试章节</h1><p>This contains Chinese characters: 测试</p>"
         book.add_item(chapter)
         book.spine = [("unicode.xhtml", True)]
-        book.toc = [epub.EpubNcx()]
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
         
         epub_buffer = io.BytesIO()
         epub.write_epub(epub_buffer, book, {})
@@ -107,7 +109,8 @@ class TestEPUBToPDFConverter:
         book.spine = [(item, True) for item in spine_items]
         
         # Create NCX navigation
-        book.toc = [epub.EpubNcx()]
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
         
         epub_buffer = io.BytesIO()
         epub.write_epub(epub_buffer, book, {})

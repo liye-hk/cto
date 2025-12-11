@@ -2,16 +2,19 @@ import io
 import logging
 import os
 import re
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
+from html.parser import HTMLParser
+from html import unescape, escape
 
+import ebooklib
 from ebooklib import epub
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from html import unescape
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +77,40 @@ def _initialize_fonts():
 _initialize_fonts()
 
 
+class HTMLTextExtractor(HTMLParser):
+    """Extract text while preserving structure and finding images"""
+    def __init__(self):
+        super().__init__()
+        self.elements = [] 
+        self.current_tag = None
+        self.images = []
+    
+    def handle_starttag(self, tag, attrs):
+        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            self.current_tag = 'heading'
+        elif tag == 'p':
+            self.current_tag = 'paragraph'
+        elif tag == 'li':
+            self.current_tag = 'list_item'
+        elif tag == 'img':
+            attrs_dict = dict(attrs)
+            src = attrs_dict.get('src', '')
+            if src:
+                self.images.append(src)
+    
+    def handle_data(self, data):
+        if data.strip():
+            # Use 'paragraph' as default if no tag matches
+            tag_type = self.current_tag if self.current_tag else 'paragraph'
+            self.elements.append((tag_type, data.strip()))
+    
+    def handle_endtag(self, tag):
+        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li']:
+            self.current_tag = None
+
+
 class ConversionError(Exception):
     """Exception raised when conversion fails."""
-
     pass
 
 
@@ -103,63 +137,87 @@ class EPUBToPDFConverter:
             # Parse EPUB
             epub_book = self._parse_epub(epub_content)
             self.logger.info(f"Successfully parsed EPUB with {len(epub_book.spine)} chapters")
+            
+            # Extract images from EPUB
+            epub_images = self._extract_images(epub_book)
 
             # Create PDF in memory
             pdf_buffer = io.BytesIO()
             doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
-
-            # Build story with EPUB content using simplified approach
             story = []
-            styles = getSampleStyleSheet()
 
             # Check if CJK fonts were successfully registered
             wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
             
+            styles = getSampleStyleSheet()
             if wqy_registered:
-                # Create custom style with explicit CJK font
-                cjk_style = ParagraphStyle(
+                # Define styles using WenQuanYi
+                styles.add(ParagraphStyle(
                     'CJKBody',
                     fontName='WenQuanYi',
                     fontSize=11,
                     leading=14,
-                )
-                
-                # Create custom heading style with CJK font
-                cjk_heading_style = ParagraphStyle(
+                    spaceAfter=8,
+                ))
+                styles.add(ParagraphStyle(
                     'CJKHeading',
-                    fontName='WenQuanYi-Bold',
+                    fontName='WenQuanYi',
+                    fontBold=True,
                     fontSize=16,
-                    leading=19,
-                )
+                    leading=20,
+                    spaceAfter=12,
+                    textColor=colors.HexColor('#333333'),
+                ))
+                styles.add(ParagraphStyle(
+                    'CJKList',
+                    fontName='WenQuanYi',
+                    fontSize=11,
+                    leading=14,
+                    leftIndent=20,
+                    spaceAfter=6,
+                ))
                 self.logger.info("Using WenQuanYi CJK fonts for PDF generation")
             else:
-                # Use default styles with enhanced fallback
-                cjk_style = ParagraphStyle(
+                # Fallback styles
+                styles.add(ParagraphStyle(
                     'CJKBody',
                     fontName='Helvetica',
                     fontSize=11,
                     leading=14,
-                )
-                
-                cjk_heading_style = ParagraphStyle(
+                    spaceAfter=8,
+                ))
+                styles.add(ParagraphStyle(
                     'CJKHeading',
                     fontName='Helvetica-Bold',
                     fontSize=16,
-                    leading=19,
-                )
+                    leading=20,
+                    spaceAfter=12,
+                    textColor=colors.HexColor('#333333'),
+                ))
+                styles.add(ParagraphStyle(
+                    'CJKList',
+                    fontName='Helvetica',
+                    fontSize=11,
+                    leading=14,
+                    leftIndent=20,
+                    spaceAfter=6,
+                ))
                 self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
 
             # Add book title if available
             if epub_book.title:
                 try:
-                    title_text = self._extract_text_from_html(epub_book.title)
-                    if title_text.strip():
-                        story.append(Paragraph(self._escape_text(title_text[:500]), cjk_heading_style))
+                    title_text = epub_book.title
+                    if isinstance(title_text, tuple) or isinstance(title_text, list):
+                        title_text = title_text[0]
+                    
+                    if title_text:
+                        story.append(Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading']))
                         story.append(Spacer(1, 0.3 * inch))
                 except Exception as e:
                     self.logger.warning(f"Skipped title: {str(e)}")
 
-            # Process chapters with error handling
+            # Process chapters
             for item in epub_book.spine:
                 # Spine items are typically tuples like ('chapter_id', 'yes'/'no')
                 if isinstance(item, tuple):
@@ -167,25 +225,53 @@ class EPUBToPDFConverter:
                 else:
                     item_id = item
 
-                chapter = epub_book.get_item_with_id(item_id)
-                if chapter is None:
-                    continue
-
-                # Only process HTML/document items
-                if isinstance(chapter, epub.EpubHtml):
-                    try:
-                        content = chapter.get_content().decode('utf-8', errors='ignore')
-                        
-                        # Extract plain text from HTML
-                        text = self._extract_text_from_html(content)
-                        
-                        if text.strip():
-                            p = Paragraph(self._escape_text(text[:500]), cjk_style)
-                            story.append(p)
-                            story.append(Spacer(1, 0.2 * inch))
-                    except Exception as e:
-                        self.logger.warning(f"Skipped chapter: {str(e)}")
+                try:
+                    chapter = epub_book.get_item_with_id(item_id)
+                    if chapter is None:
                         continue
+                    
+                    # Only process HTML/document items
+                    if not isinstance(chapter, epub.EpubHtml):
+                        continue
+                    
+                    content = chapter.get_content().decode('utf-8', errors='ignore')
+                    
+                    # Extract text and structure
+                    extractor = HTMLTextExtractor()
+                    extractor.feed(content)
+                    
+                    # Add chapter content to PDF
+                    for item_type, item_data in extractor.elements:
+                        if item_type == 'heading':
+                            p = Paragraph(escape(item_data[:500]), styles['CJKHeading'])
+                            story.append(p)
+                        elif item_type == 'paragraph':
+                            p = Paragraph(escape(item_data[:500]), styles['CJKBody'])
+                            story.append(p)
+                        elif item_type == 'list_item':
+                            text = f"• {item_data[:500]}"
+                            p = Paragraph(escape(text), styles['CJKList'])
+                            story.append(p)
+                    
+                    # Try to embed images found in chapter
+                    for img_src in extractor.images:
+                        # Extract basename from path
+                        img_path = img_src.replace('../', '').split('/')[-1]
+                        
+                        if img_path in epub_images:
+                            try:
+                                img_bytes = io.BytesIO(epub_images[img_path])
+                                img = Image(img_bytes, width=4*inch, height=3*inch)
+                                story.append(img)
+                                story.append(Spacer(1, 0.2*inch))
+                            except Exception as e:
+                                self.logger.warning(f"Failed to embed image {img_path}: {e}")
+                    
+                    story.append(PageBreak())
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to process chapter: {e}")
+                    continue
 
             # Build the PDF
             doc.build(story)
@@ -220,54 +306,23 @@ class EPUBToPDFConverter:
             self.logger.error(f"Failed to parse EPUB: {str(e)}")
             raise ConversionError(f"Invalid EPUB file: {str(e)}")
 
-    def _extract_text_from_html(self, html_content: str) -> str:
+    def _extract_images(self, book: epub.EpubBook) -> Dict[str, bytes]:
         """
-        Extract plain text from HTML content.
-
-        Args:
-            html_content: HTML string
-
-        Returns:
-            Plain text string
+        Extract all images from EPUB book, keyed by filename (basename).
         """
-        # Remove script and style tags
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html_content, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-
-        # Add newlines before block elements
-        text = re.sub(r"<p[^>]*>", "", text)
-        text = re.sub(r"</p>", "\n\n", text)
-        text = re.sub(r"<div[^>]*>", "", text)
-        text = re.sub(r"</div>", "\n\n", text)
-        text = re.sub(r"<h[1-6][^>]*>", "", text)
-        text = re.sub(r"</h[1-6]>", "\n\n", text)
-        text = re.sub(r"<br\s*/?>\s*", "\n", text, flags=re.IGNORECASE)
-        text = re.sub(r"<li[^>]*>", "- ", text)
-        text = re.sub(r"</li>", "\n", text)
-
-        # Remove other HTML tags
-        text = re.sub(r"<[^>]+>", "", text)
-
-        # Decode HTML entities
-        text = unescape(text)
-
-        # Clean up whitespace
-        lines = text.split("\n")
-        lines = [line.strip() for line in lines if line.strip()]
-        return "\n".join(lines)
+        images = {}
+        for item in book.get_items():
+            if item.get_type() == ebooklib.ITEM_IMAGE:
+                # Store by basename to match logic in converter
+                # Some epubs might have same filename in different folders, this might overwrite
+                # but it matches the simplified logic we are implementing.
+                basename = os.path.basename(item.get_name())
+                images[basename] = item.get_content()
+        return images
 
     def _escape_text(self, text: str) -> str:
         """
         Escape special characters for reportlab.
-
-        Args:
-            text: Text to escape
-
-        Returns:
-            Escaped text safe for reportlab
+        Using html.escape is preferred now but keeping this for compatibility/fallback usage.
         """
-        # Replace problematic characters
-        text = text.replace("&", "&")
-        text = text.replace("<", "<")
-        text = text.replace(">", ">")
-        return text
+        return escape(text)
