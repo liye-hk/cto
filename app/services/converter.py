@@ -372,7 +372,7 @@ class EPUBToPDFConverter:
             epub_book = self._parse_epub(epub_content)
             self.logger.info("EPUB loaded")
 
-            # DEBUG: Print first chapter HTML to see actual formatting
+            # DEBUG: Print chapter 3, 4, 5 HTML to find formatting
             debug_count = 0
             for item in epub_book.spine:
                 item_id = item[0] if isinstance(item, tuple) else item
@@ -389,23 +389,26 @@ class EPUBToPDFConverter:
                     if chapter is None or not isinstance(chapter, epub.EpubHtml):
                         continue
                     
+                    debug_count += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
                     
-                    # Output first non-empty chapter
-                    if debug_count == 0 and len(content) > 100:
+                    # Skip first chapter (usually cover), show chapter 3-5
+                    if debug_count >= 3 and debug_count <= 5:
                         self.logger.info("=" * 80)
-                        self.logger.info("SAMPLE EPUB HTML (first 2000 chars):")
+                        self.logger.info(f"CHAPTER {debug_count} HTML (first 3000 chars):")
                         self.logger.info("=" * 80)
-                        # Show HTML with formatting highlighted
-                        sample = content[:2000]
-                        # Replace newlines for readability
+                        sample = content[:3000]
                         sample = sample.replace('\n', ' ')
+                        # Show with markers for important tags
+                        sample = sample.replace('<', '\n<').replace('>', '>\n')
                         self.logger.info(sample)
                         self.logger.info("=" * 80)
-                        debug_count += 1
                     
-                    break
-                except:
+                    if debug_count > 5:
+                        break
+                
+                except Exception as e:
+                    self.logger.error(f"Debug error: {e}")
                     continue
 
             epub_images = self._extract_images(epub_book)
