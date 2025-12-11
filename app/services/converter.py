@@ -372,6 +372,42 @@ class EPUBToPDFConverter:
             epub_book = self._parse_epub(epub_content)
             self.logger.info("EPUB loaded")
 
+            # DEBUG: Print first chapter HTML to see actual formatting
+            debug_count = 0
+            for item in epub_book.spine:
+                item_id = item[0] if isinstance(item, tuple) else item
+                try:
+                    chapter = epub_book.get_item_with_id(item_id)
+                    
+                    # If not found by ID, try to find by filename (common issue with EpubHtml)
+                    if chapter is None:
+                        for book_item in epub_book.get_items():
+                            if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
+                                chapter = book_item
+                                break
+                    
+                    if chapter is None or not isinstance(chapter, epub.EpubHtml):
+                        continue
+                    
+                    content = chapter.get_content().decode('utf-8', errors='ignore')
+                    
+                    # Output first non-empty chapter
+                    if debug_count == 0 and len(content) > 100:
+                        self.logger.info("=" * 80)
+                        self.logger.info("SAMPLE EPUB HTML (first 2000 chars):")
+                        self.logger.info("=" * 80)
+                        # Show HTML with formatting highlighted
+                        sample = content[:2000]
+                        # Replace newlines for readability
+                        sample = sample.replace('\n', ' ')
+                        self.logger.info(sample)
+                        self.logger.info("=" * 80)
+                        debug_count += 1
+                    
+                    break
+                except:
+                    continue
+
             epub_images = self._extract_images(epub_book)
 
             pdf_buffer = io.BytesIO()
