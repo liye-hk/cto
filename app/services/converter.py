@@ -356,6 +356,21 @@ def get_alignment(attrs_dict: Optional[Dict[str, str]]) -> int:
     return TA_JUSTIFY
 
 
+def convert_css_classes_to_html(html_content: str) -> str:
+    """Convert CSS class formatting to HTML tags for reportlab."""
+    # Convert <span class="bold">text</span> to <b>text</b>
+    html_content = re.sub(r'<span class="bold">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
+    html_content = re.sub(r'<span class="bold\s+.*?">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
+    
+    # Convert <strong class="...">text</strong> to <b>text</b>
+    html_content = re.sub(r'<strong class=".*?">(.*?)</strong>', r'<b>\1</b>', html_content, flags=re.DOTALL)
+    
+    # Handle center-aligned paragraphs
+    html_content = re.sub(r'<p class=".*?center.*?">', '<p align="center">', html_content, flags=re.IGNORECASE)
+    
+    return html_content
+
+
 class ConversionError(Exception):
     """Exception raised when conversion fails."""
     pass
@@ -405,6 +420,9 @@ class EPUBToPDFConverter:
                     
                     debug_count += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
+                    
+                    # Convert CSS classes to HTML tags
+                    content = convert_css_classes_to_html(content)
                     
                     # Skip first chapter (usually cover), show chapter 3-5
                     if debug_count >= 3 and debug_count <= 5:
@@ -529,6 +547,9 @@ class EPUBToPDFConverter:
 
                     chapters_processed += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
+
+                    # Convert CSS classes to HTML tags
+                    content = convert_css_classes_to_html(content)
 
                     extractor = FormattingPreservingExtractor()
                     extractor.feed(content)
