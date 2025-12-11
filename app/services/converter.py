@@ -1,10 +1,9 @@
 import io
 import logging
 import os
-import re
-from typing import Optional, Dict, List, Tuple
+from typing import Dict, List
 from html.parser import HTMLParser
-from html import unescape, escape
+from html import escape
 
 import ebooklib
 from ebooklib import epub
@@ -17,6 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 logger = logging.getLogger(__name__)
+
 
 # Register fonts at module initialization
 def _initialize_fonts():
@@ -73,40 +73,30 @@ def _initialize_fonts():
             except Exception as e:
                 logger.error(f"Failed to register DejaVu fonts: {e}")
 
+
 # Call once at module load
 _initialize_fonts()
 
 
-class HTMLTextExtractor(HTMLParser):
-    """Extract text while preserving structure and finding images"""
+class ImageExtractor(HTMLParser):
+    """Simple parser to collect inline text and image sources."""
+
     def __init__(self):
         super().__init__()
-        self.elements = [] 
-        self.current_tag = None
-        self.images = []
-    
+        self.images: List[str] = []
+        self.text_chunks: List[str] = []
+
     def handle_starttag(self, tag, attrs):
-        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-            self.current_tag = 'heading'
-        elif tag == 'p':
-            self.current_tag = 'paragraph'
-        elif tag == 'li':
-            self.current_tag = 'list_item'
-        elif tag == 'img':
+        if tag == 'img':
             attrs_dict = dict(attrs)
             src = attrs_dict.get('src', '')
             if src:
                 self.images.append(src)
-    
+
     def handle_data(self, data):
-        if data.strip():
-            # Use 'paragraph' as default if no tag matches
-            tag_type = self.current_tag if self.current_tag else 'paragraph'
-            self.elements.append((tag_type, data.strip()))
-    
-    def handle_endtag(self, tag):
-        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li']:
-            self.current_tag = None
+        stripped = data.strip()
+        if stripped:
+            self.text_chunks.append(stripped)
 
 
 class ConversionError(Exception):
@@ -138,12 +128,17 @@ class EPUBToPDFConverter:
             epub_book = self._parse_epub(epub_content)
             self.logger.info(f"Successfully parsed EPUB with {len(epub_book.spine)} chapters")
             
-            # Extract images from EPUB
+            # Extract images from EPUB with logging
             epub_images = self._extract_images(epub_book)
 
             # Create PDF in memory
             pdf_buffer = io.BytesIO()
-            doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+            doc = SimpleDocTemplate(
+                pdf_buffer,
+                pagesize=letter,
+                topMargin=0.5 * inch,
+                bottomMargin=0.5 * inch,
+            )
             story = []
 
             # Check if CJK fonts were successfully registered
@@ -235,38 +230,43 @@ class EPUBToPDFConverter:
                         continue
                     
                     content = chapter.get_content().decode('utf-8', errors='ignore')
-                    
-                    # Extract text and structure
-                    extractor = HTMLTextExtractor()
+                    extractor = ImageExtractor()
                     extractor.feed(content)
-                    
-                    # Add chapter content to PDF
-                    for item_type, item_data in extractor.elements:
-                        if item_type == 'heading':
-                            p = Paragraph(escape(item_data[:500]), styles['CJKHeading'])
-                            story.append(p)
-                        elif item_type == 'paragraph':
-                            p = Paragraph(escape(item_data[:500]), styles['CJKBody'])
-                            story.append(p)
-                        elif item_type == 'list_item':
-                            text = f"• {item_data[:500]}"
-                            p = Paragraph(escape(text), styles['CJKList'])
-                            story.append(p)
-                    
+
+                    # Simple text aggregation for chapter content
+                    if extractor.text_chunks:
+                        text = ' '.join(extractor.text_chunks)[:1000]
+                        if text:
+                            try:
+                                paragraph = Paragraph(self._escape_text(text), styles['CJKBody'])
+                                story.append(paragraph)
+                                story.append(Spacer(1, 0.1 * inch))
+                            except Exception as e:
+                                chapter_name = getattr(chapter, 'file_name', item_id)
+                                self.logger.warning(f"Failed to add text for {chapter_name}: {e}")
+
                     # Try to embed images found in chapter
                     for img_src in extractor.images:
-                        # Extract basename from path
-                        img_path = img_src.replace('../', '').split('/')[-1]
-                        
-                        if img_path in epub_images:
-                            try:
-                                img_bytes = io.BytesIO(epub_images[img_path])
-                                img = Image(img_bytes, width=4*inch, height=3*inch)
-                                story.append(img)
-                                story.append(Spacer(1, 0.2*inch))
-                            except Exception as e:
-                                self.logger.warning(f"Failed to embed image {img_path}: {e}")
-                    
+                        img_name = img_src.replace('../', '').split('/')[-1]
+                        self.logger.info(f"Looking for image: {img_name}")
+                        matched_image = False
+
+                        for epub_img_name, img_data in epub_images.items():
+                            if img_name and (img_name in epub_img_name or epub_img_name in img_name):
+                                matched_image = True
+                                try:
+                                    img_buffer = io.BytesIO(img_data)
+                                    img = Image(img_buffer, width=3 * inch, height=2 * inch)
+                                    story.append(img)
+                                    story.append(Spacer(1, 0.2 * inch))
+                                    self.logger.info(f"Added image: {epub_img_name}")
+                                except Exception as e:
+                                    self.logger.error(f"Failed to add image {epub_img_name}: {e}")
+                                break
+
+                        if not matched_image:
+                            self.logger.warning(f"Image not found in EPUB assets: {img_name}")
+
                     story.append(PageBreak())
                     
                 except Exception as e:
@@ -308,16 +308,27 @@ class EPUBToPDFConverter:
 
     def _extract_images(self, book: epub.EpubBook) -> Dict[str, bytes]:
         """
-        Extract all images from EPUB book, keyed by filename (basename).
+        Extract all images from EPUB book, keyed by the original item name.
         """
-        images = {}
+        images: Dict[str, bytes] = {}
         for item in book.get_items():
-            if item.get_type() == ebooklib.ITEM_IMAGE:
-                # Store by basename to match logic in converter
-                # Some epubs might have same filename in different folders, this might overwrite
-                # but it matches the simplified logic we are implementing.
-                basename = os.path.basename(item.get_name())
-                images[basename] = item.get_content()
+            item_type = item.get_type()
+            is_image = item_type == ebooklib.ITEM_IMAGE
+
+            if not is_image and isinstance(item_type, str):
+                is_image = 'image' in item_type.lower()
+
+            if not is_image:
+                media_type = getattr(item, 'media_type', '')
+                if isinstance(media_type, str):
+                    is_image = 'image' in media_type.lower()
+
+            if is_image:
+                name = item.get_name()
+                images[name] = item.get_content()
+                self.logger.info(f"Found image: {name}")
+
+        self.logger.info(f"Total images found: {len(images)}")
         return images
 
     def _escape_text(self, text: str) -> str:
