@@ -7,13 +7,71 @@ from typing import Optional
 from ebooklib import epub
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from html import unescape
 
 logger = logging.getLogger(__name__)
+
+# Register fonts at module initialization
+def _initialize_fonts():
+    """Initialize fonts once at startup"""
+    # First try to register WQY fonts (CJK support)
+    wqy_fonts = {
+        'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        'WenQuanYi-Bold': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+    }
+    
+    for name, path in wqy_fonts.items():
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont(name, path))
+                logger.info(f"Registered font: {name}")
+            except Exception as e:
+                logger.warning(f"Failed to register WQY font {name}: {e}")
+    
+    # Try .ttf extension if .ttc fails
+    if not any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames()):
+        wqy_ttf = {
+            'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+            'WenQuanYi-Bold': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+        }
+        
+        for name, path in wqy_ttf.items():
+            if os.path.exists(path):
+                try:
+                    pdfmetrics.registerFont(TTFont(name, path))
+                    logger.info(f"Registered WQY TTF font: {name}")
+                except Exception as e:
+                    logger.warning(f"Failed to register WQY TTF font {name}: {e}")
+    
+    # Check if WQY fonts were registered successfully
+    wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
+    
+    if wqy_registered:
+        # Register font family for proper CJK font usage
+        try:
+            pdfmetrics.registerFontFamily('WenQuanYi', normal='WenQuanYi', bold='WenQuanYi-Bold', 
+                                         italic='WenQuanYi', boldItalic='WenQuanYi-Bold')
+            logger.info("Registered WenQuanYi font family")
+        except Exception as e:
+            logger.error(f"Failed to register font family: {e}")
+    else:
+        logger.warning("WQY fonts not available, CJK characters may not render properly")
+        
+        # Ensure at least DejaVu fonts are available for fallback
+        if 'DejaVuSans' not in pdfmetrics.getRegisteredFontNames():
+            try:
+                pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
+                logger.info("Registered DejaVu fallback fonts")
+            except Exception as e:
+                logger.error(f"Failed to register DejaVu fonts: {e}")
+
+# Call once at module load
+_initialize_fonts()
 
 
 class ConversionError(Exception):
@@ -27,19 +85,6 @@ class EPUBToPDFConverter:
 
     def __init__(self):
         self.logger = logger
-        self._register_cjk_font()
-
-    def _register_cjk_font(self):
-        """Register CJK font if available"""
-        font_path = '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf'
-        if os.path.exists(font_path):
-            try:
-                pdfmetrics.registerFont(TTFont('CJK', font_path))
-                self.logger.info("Successfully registered CJK font")
-                return True
-            except Exception as e:
-                self.logger.warning(f"Failed to register CJK font: {str(e)}")
-        return False
 
     def convert(self, epub_content: bytes) -> bytes:
         """
@@ -67,15 +112,49 @@ class EPUBToPDFConverter:
             story = []
             styles = getSampleStyleSheet()
 
-            # Don't override fontName - let reportlab handle it
-            # Just extract text and let the simple style handle it
+            # Check if CJK fonts were successfully registered
+            wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
+            
+            if wqy_registered:
+                # Create custom style with explicit CJK font
+                cjk_style = ParagraphStyle(
+                    'CJKBody',
+                    fontName='WenQuanYi',
+                    fontSize=11,
+                    leading=14,
+                )
+                
+                # Create custom heading style with CJK font
+                cjk_heading_style = ParagraphStyle(
+                    'CJKHeading',
+                    fontName='WenQuanYi-Bold',
+                    fontSize=16,
+                    leading=19,
+                )
+                self.logger.info("Using WenQuanYi CJK fonts for PDF generation")
+            else:
+                # Use default styles with enhanced fallback
+                cjk_style = ParagraphStyle(
+                    'CJKBody',
+                    fontName='Helvetica',
+                    fontSize=11,
+                    leading=14,
+                )
+                
+                cjk_heading_style = ParagraphStyle(
+                    'CJKHeading',
+                    fontName='Helvetica-Bold',
+                    fontSize=16,
+                    leading=19,
+                )
+                self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
 
             # Add book title if available
             if epub_book.title:
                 try:
                     title_text = self._extract_text_from_html(epub_book.title)
                     if title_text.strip():
-                        story.append(Paragraph(self._escape_text(title_text[:500]), styles['Heading1']))
+                        story.append(Paragraph(self._escape_text(title_text[:500]), cjk_heading_style))
                         story.append(Spacer(1, 0.3 * inch))
                 except Exception as e:
                     self.logger.warning(f"Skipped title: {str(e)}")
@@ -101,7 +180,7 @@ class EPUBToPDFConverter:
                         text = self._extract_text_from_html(content)
                         
                         if text.strip():
-                            p = Paragraph(self._escape_text(text[:500]), styles['Normal'])
+                            p = Paragraph(self._escape_text(text[:500]), cjk_style)
                             story.append(p)
                             story.append(Spacer(1, 0.2 * inch))
                     except Exception as e:
