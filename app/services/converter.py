@@ -25,7 +25,13 @@ ALLOWED_INLINE_TAG_PATTERN = re.compile(
 )
 
 PIXELS_TO_POINTS = 0.75
-MAX_IMAGE_WIDTH = 7 * inch
+# Page dimensions for standard letter (8.5 x 11 inches) with 0.5 inch margins
+PAGE_WIDTH = 8.5 * inch
+PAGE_HEIGHT = 11 * inch
+PAGE_MARGIN = 0.5 * inch
+MAX_IMAGE_WIDTH = PAGE_WIDTH - 2 * PAGE_MARGIN  # 7.5 inches
+MAX_IMAGE_HEIGHT = PAGE_HEIGHT - 2 * PAGE_MARGIN  # 10 inches
+MIN_IMAGE_SIZE = 1.0 * inch
 DEFAULT_IMAGE_WIDTH = 4 * inch
 DEFAULT_IMAGE_HEIGHT = 3 * inch
 
@@ -519,10 +525,27 @@ class EPUBToPDFConverter:
                                         if height is None:
                                             height = DEFAULT_IMAGE_HEIGHT
 
+                                        # Scale down if too large, maintaining aspect ratio
+                                        scale_factor = 1.0
+                                        
                                         if width > MAX_IMAGE_WIDTH:
-                                            ratio = MAX_IMAGE_WIDTH / width
-                                            width = MAX_IMAGE_WIDTH
-                                            height = height * ratio
+                                            scale_factor = MAX_IMAGE_WIDTH / width
+                                        
+                                        if height * scale_factor > MAX_IMAGE_HEIGHT:
+                                            scale_factor = MAX_IMAGE_HEIGHT / height
+                                        
+                                        width = width * scale_factor
+                                        height = height * scale_factor
+                                        
+                                        # Ensure minimum size
+                                        if width < MIN_IMAGE_SIZE:
+                                            ratio = height / width if width > 0 else 1
+                                            width = MIN_IMAGE_SIZE
+                                            height = MIN_IMAGE_SIZE * ratio
+                                            # Re-check max height after minimum size adjustment
+                                            if height > MAX_IMAGE_HEIGHT:
+                                                height = MAX_IMAGE_HEIGHT
+                                                width = height / ratio if ratio > 0 else MIN_IMAGE_SIZE
 
                                         image_buffer = io.BytesIO(raw_img)
                                         img = RLImage(image_buffer, width=width, height=height)
