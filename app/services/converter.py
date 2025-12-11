@@ -1,7 +1,8 @@
 import io
 import logging
 import os
-from typing import Dict, List, Tuple, Optional, Union
+import re
+from typing import Dict, List, Tuple, Optional
 from html.parser import HTMLParser
 from html import escape
 
@@ -16,6 +17,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_INLINE_TAG_PATTERN = re.compile(
+    r'(?i)(</?(?:b|strong|i|em|u|font)(?:\s+[^<>]*?)?>|<br\s*/?>)'
+)
 
 
 # Register fonts at module initialization
@@ -78,47 +83,107 @@ def _initialize_fonts():
 _initialize_fonts()
 
 
-class TextAndImageExtractor(HTMLParser):
-    """Extract text with structure info and images"""
+class FormattingPreservingExtractor(HTMLParser):
+    """Extract text while preserving inline formatting and images."""
+
+    HEADING_TAGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
+    BLOCK_TAGS = HEADING_TAGS.union({'p', 'li', 'div'})
+    LIST_CONTAINER_TAGS = {'ul', 'ol'}
+    INLINE_FORMATTING_TAGS = {'b', 'strong', 'i', 'em', 'u'}
+
     def __init__(self):
-        super().__init__()
-        self.elements = []
-        self.current_text = []
-        self.current_tag = None
-    
+        super().__init__(convert_charrefs=True)
+        self.elements: List[Tuple[str, str]] = []
+        self.current_text: List[str] = []
+        self.current_tag: Optional[str] = None
+
     def handle_starttag(self, tag, attrs):
-        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+        tag = tag.lower()
+        if tag in self.BLOCK_TAGS or tag in self.LIST_CONTAINER_TAGS:
             self._flush_text()
-            self.current_tag = tag
-        elif tag == 'p':
-            self._flush_text()
-            self.current_tag = 'p'
-        elif tag in ['li', 'ul', 'ol']:
-            self._flush_text()
-            self.current_tag = tag
+            if tag in self.HEADING_TAGS:
+                self.current_tag = tag
+            elif tag == 'li' or tag in self.LIST_CONTAINER_TAGS:
+                self.current_tag = 'li'
+            else:
+                self.current_tag = 'p'
+
+        if tag in self.INLINE_FORMATTING_TAGS:
+            self.current_text.append(f'<{tag}>')
+        elif tag == 'font':
+            color = self._sanitize_color(attrs)
+            if color:
+                self.current_text.append(f'<font color="{color}">')
+        elif tag == 'br':
+            self.current_text.append('<br/>')
         elif tag == 'img':
             self._flush_text()
-            attrs_dict = dict(attrs)
-            src = attrs_dict.get('src', '')
+            attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
+            src = attrs_dict.get('src') or ''
             if src:
                 self.elements.append(('img', src))
-    
-    def handle_data(self, data):
-        text = data.strip()
-        if text:
-            self.current_text.append(text)
-    
+
+    def handle_startendtag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == 'br':
+            self.current_text.append('<br/>')
+        elif tag == 'img':
+            self._flush_text()
+            attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
+            src = attrs_dict.get('src') or ''
+            if src:
+                self.elements.append(('img', src))
+
     def handle_endtag(self, tag):
-        if tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li']:
+        tag = tag.lower()
+        if tag in self.INLINE_FORMATTING_TAGS:
+            self.current_text.append(f'</{tag}>')
+        elif tag == 'font':
+            self.current_text.append('</font>')
+        elif tag == 'br':
+            self.current_text.append('<br/>')
+        elif tag in self.BLOCK_TAGS or tag in self.LIST_CONTAINER_TAGS:
             self._flush_text()
             self.current_tag = None
-    
+
+    def handle_data(self, data):
+        if not data:
+            return
+        normalized = data.replace('\xa0', ' ')
+        normalized = re.sub(r'\s+', ' ', normalized)
+        if normalized:
+            self.current_text.append(normalized)
+
+    def close(self):
+        super().close()
+        self._flush_text()
+
     def _flush_text(self):
-        if self.current_text:
-            text = ' '.join(self.current_text).strip()
-            if text:
-                self.elements.append((self.current_tag or 'p', text))
-            self.current_text = []
+        if not self.current_text:
+            return
+        text = ''.join(self.current_text)
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        if text:
+            self.elements.append((self.current_tag or 'p', text))
+        self.current_text = []
+
+    @staticmethod
+    def _sanitize_color(attrs: List[Tuple[str, Optional[str]]]) -> Optional[str]:
+        attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
+        color = attrs_dict.get('color')
+        if not color:
+            return None
+        color = color.strip()
+        if not color:
+            return None
+        if color.startswith('#'):
+            if re.fullmatch(r'#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})', color):
+                return color
+            return None
+        if re.fullmatch(r'[a-zA-Z]+', color):
+            return color.lower()
+        return None
 
 
 class ConversionError(Exception):
@@ -210,6 +275,7 @@ class EPUBToPDFConverter:
                 leading=16,
                 spaceAfter=6,
                 alignment=4,  # Justify
+                firstLineIndent=0.25 * inch,
             ))
             
             styles.add(ParagraphStyle(
@@ -262,8 +328,9 @@ class EPUBToPDFConverter:
                     content = chapter.get_content().decode('utf-8', errors='ignore')
                     
                     # Extract structured content
-                    extractor = TextAndImageExtractor()
+                    extractor = FormattingPreservingExtractor()
                     extractor.feed(content)
+                    extractor.close()
 
                     # Add elements to PDF
                     for elem_type, elem_data in extractor.elements:
@@ -281,7 +348,7 @@ class EPUBToPDFConverter:
                                 p = Paragraph(safe_data, styles['CJKHeading3'])
                                 story.append(p)
                             elif elem_type == 'li':
-                                p = Paragraph(f"• {safe_data}", styles['CJKList'])
+                                p = Paragraph(f"<b>•</b> {safe_data}", styles['CJKList'])
                                 story.append(p)
                             elif elem_type == 'img':
                                 img_name = elem_data.replace('../', '').split('/')[-1]
@@ -372,6 +439,21 @@ class EPUBToPDFConverter:
 
     def _escape_text(self, text: str) -> str:
         """
-        Escape special characters for reportlab.
+        Escape text for reportlab while preserving styling tags.
         """
-        return escape(text)
+        if not text:
+            return ''
+
+        parts: List[str] = []
+        last_index = 0
+        for match in ALLOWED_INLINE_TAG_PATTERN.finditer(text):
+            start, end = match.span()
+            if start > last_index:
+                parts.append(escape(text[last_index:start]))
+            parts.append(match.group(0))
+            last_index = end
+
+        if last_index < len(text):
+            parts.append(escape(text[last_index:]))
+
+        return ''.join(parts)

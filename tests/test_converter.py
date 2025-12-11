@@ -56,17 +56,23 @@ class TestEPUBToPDFConverter:
             converter.convert(b"")
 
     def test_escape_text(self, converter):
-        """Test text escaping for reportlab."""
-        text = "Text with <special> & characters"
+        """Ensure escaping preserves formatting tags while sanitizing others."""
+        text = (
+            'Text with <special> & characters, '
+            '<b>bold</b> and <font color="#ff0000">red</font> text.'
+        )
         escaped = converter._escape_text(text)
 
-        # Should escape the special characters
+        # Disallowed tags should be escaped
+        assert "&lt;special&gt;" in escaped
         assert "&amp;" in escaped
-        assert "&lt;" in escaped
-        assert "&gt;" in escaped
-        # Check that the text content is preserved (escaped)
+
+        # Allowed formatting tags should be preserved in the output
+        assert "<b>bold</b>" in escaped
+        assert '<font color="#ff0000">red</font>' in escaped
+
+        # Plain text should remain readable
         assert "Text with" in escaped
-        assert "special" in escaped
         assert "characters" in escaped
 
     def test_converter_handles_unicode(self, converter):
