@@ -8,11 +8,13 @@ from html import escape
 
 import ebooklib
 from ebooklib import epub
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer, Image as RLImage
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -22,10 +24,21 @@ ALLOWED_INLINE_TAG_PATTERN = re.compile(
     r'(?i)(</?(?:b|strong|i|em|u|font)(?:\s+[^<>]*?)?>|<br\s*/?>)'
 )
 
+PIXELS_TO_POINTS = 0.75
+MAX_IMAGE_WIDTH = 7 * inch
+DEFAULT_IMAGE_WIDTH = 4 * inch
+DEFAULT_IMAGE_HEIGHT = 3 * inch
+
+_FONTS_INITIALIZED = False
+
 
 # Register fonts at module initialization
 def _initialize_fonts():
     """Initialize fonts once at startup"""
+    global _FONTS_INITIALIZED
+    if _FONTS_INITIALIZED:
+        return
+
     # First try to register WQY fonts (CJK support)
     wqy_fonts = {
         'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
@@ -78,73 +91,126 @@ def _initialize_fonts():
             except Exception as e:
                 logger.error(f"Failed to register DejaVu fonts: {e}")
 
+    _FONTS_INITIALIZED = True
+
 
 # Call once at module load
 _initialize_fonts()
 
 
 class FormattingPreservingExtractor(HTMLParser):
-    """Extract text while preserving inline formatting and images."""
+    """Extract text with formatting, colors, alignment, and images."""
 
     HEADING_TAGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
-    BLOCK_TAGS = HEADING_TAGS.union({'p', 'li', 'div'})
+    BLOCK_TAGS = HEADING_TAGS.union({'p', 'li', 'div', 'center'})
     LIST_CONTAINER_TAGS = {'ul', 'ol'}
     INLINE_FORMATTING_TAGS = {'b', 'strong', 'i', 'em', 'u'}
+    COLOR_STYLE_PATTERN = re.compile(r'color\s*:\s*([^;]+)', re.IGNORECASE)
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.elements: List[Tuple[str, str]] = []
+        self.elements: List[Tuple[str, object]] = []
         self.current_text: List[str] = []
         self.current_tag: Optional[str] = None
+        self.current_attrs: Dict[str, str] = {}
+        self.font_stack: List[bool] = []
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
-        if tag in self.BLOCK_TAGS or tag in self.LIST_CONTAINER_TAGS:
+        attrs_dict = {
+            k.lower(): v for k, v in attrs
+            if isinstance(k, str) and v is not None
+        }
+
+        if tag in self.BLOCK_TAGS:
             self._flush_text()
             if tag in self.HEADING_TAGS:
                 self.current_tag = tag
-            elif tag == 'li' or tag in self.LIST_CONTAINER_TAGS:
+            elif tag == 'li':
                 self.current_tag = 'li'
+            elif tag == 'div':
+                self.current_tag = 'div'
+            elif tag == 'center':
+                self.current_tag = 'center'
+                attrs_dict = dict(attrs_dict)
+                attrs_dict.setdefault('align', 'center')
             else:
                 self.current_tag = 'p'
+            self.current_attrs = dict(attrs_dict)
+        elif tag in self.LIST_CONTAINER_TAGS:
+            self._flush_text()
+            self.current_tag = None
+            self.current_attrs = {}
 
-        if tag in self.INLINE_FORMATTING_TAGS:
-            self.current_text.append(f'<{tag}>')
+        if tag in {'b', 'strong'}:
+            self.current_text.append('<b>')
+        elif tag in {'i', 'em'}:
+            self.current_text.append('<i>')
+        elif tag == 'u':
+            self.current_text.append('<u>')
         elif tag == 'font':
-            color = self._sanitize_color(attrs)
+            color = self._normalize_color(attrs_dict.get('color'))
+            if not color:
+                color = self._extract_color_from_style(attrs_dict.get('style', ''))
+            has_font = bool(color)
             if color:
                 self.current_text.append(f'<font color="{color}">')
+            self.font_stack.append(has_font)
+        elif tag == 'span':
+            color = self._extract_color_from_style(attrs_dict.get('style', ''))
+            has_font = bool(color)
+            if color:
+                self.current_text.append(f'<font color="{color}">')
+            self.font_stack.append(has_font)
         elif tag == 'br':
             self.current_text.append('<br/>')
         elif tag == 'img':
             self._flush_text()
-            attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
             src = attrs_dict.get('src') or ''
+            width = attrs_dict.get('width') or ''
+            height = attrs_dict.get('height') or ''
+            style = attrs_dict.get('style') or ''
+            if not width:
+                width_match = re.search(r'width\s*:\s*([^;]+)', style, re.IGNORECASE)
+                if width_match:
+                    width = width_match.group(1).strip()
+            if not height:
+                height_match = re.search(r'height\s*:\s*([^;]+)', style, re.IGNORECASE)
+                if height_match:
+                    height = height_match.group(1).strip()
             if src:
-                self.elements.append(('img', src))
+                self.elements.append(('img', {
+                    'src': src,
+                    'width': width,
+                    'height': height,
+                }))
 
     def handle_startendtag(self, tag, attrs):
         tag = tag.lower()
         if tag == 'br':
             self.current_text.append('<br/>')
         elif tag == 'img':
-            self._flush_text()
-            attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
-            src = attrs_dict.get('src') or ''
-            if src:
-                self.elements.append(('img', src))
+            self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-        if tag in self.INLINE_FORMATTING_TAGS:
-            self.current_text.append(f'</{tag}>')
-        elif tag == 'font':
-            self.current_text.append('</font>')
+        if tag in {'b', 'strong'}:
+            self.current_text.append('</b>')
+        elif tag in {'i', 'em'}:
+            self.current_text.append('</i>')
+        elif tag == 'u':
+            self.current_text.append('</u>')
+        elif tag in {'font', 'span'}:
+            if self.font_stack:
+                has_font = self.font_stack.pop()
+                if has_font:
+                    self.current_text.append('</font>')
         elif tag == 'br':
             self.current_text.append('<br/>')
         elif tag in self.BLOCK_TAGS or tag in self.LIST_CONTAINER_TAGS:
             self._flush_text()
             self.current_tag = None
+            self.current_attrs = {}
 
     def handle_data(self, data):
         if not data:
@@ -165,25 +231,111 @@ class FormattingPreservingExtractor(HTMLParser):
         text = re.sub(r'\s+', ' ', text)
         text = text.strip()
         if text:
-            self.elements.append((self.current_tag or 'p', text))
+            attrs_copy = dict(self.current_attrs)
+            self.elements.append((self.current_tag or 'p', text, attrs_copy))
         self.current_text = []
 
+    @classmethod
+    def _extract_color_from_style(cls, style: Optional[str]) -> Optional[str]:
+        if not style:
+            return None
+        match = cls.COLOR_STYLE_PATTERN.search(style)
+        if not match:
+            return None
+        color = match.group(1).strip()
+        color = color.split('!important')[0].strip()
+        return cls._normalize_color(color)
+
     @staticmethod
-    def _sanitize_color(attrs: List[Tuple[str, Optional[str]]]) -> Optional[str]:
-        attrs_dict = {k.lower(): v for k, v in attrs if isinstance(k, str)}
-        color = attrs_dict.get('color')
+    def _normalize_color(color: Optional[str]) -> Optional[str]:
         if not color:
             return None
-        color = color.strip()
+        color = color.strip().strip('"\'')
         if not color:
             return None
-        if color.startswith('#'):
-            if re.fullmatch(r'#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})', color):
-                return color
+        base_color = color.split('!important')[0].strip()
+        if not base_color:
             return None
-        if re.fullmatch(r'[a-zA-Z]+', color):
-            return color.lower()
+        base_color = base_color.replace(' ', '')
+        if base_color.startswith('#'):
+            if re.fullmatch(r'#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})', base_color):
+                return base_color
+            return None
+        hex_match = re.fullmatch(r'([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})', base_color)
+        if hex_match:
+            return f"#{hex_match.group(1)}"
+        if base_color.lower().startswith('rgb'):
+            return base_color.lower()
+        if re.fullmatch(r'[a-zA-Z]+', base_color):
+            return base_color.lower()
         return None
+
+
+def parse_dimension(dim_str: Optional[str]) -> Optional[float]:
+    """Parse a dimension string (e.g. 100px, 10cm, 50%)."""
+    if not dim_str:
+        return None
+
+    dim_value = str(dim_str).strip().strip('"\'')
+    if not dim_value:
+        return None
+
+    dim_value = dim_value.split('!important')[0].strip()
+    match = re.match(r'([0-9]*\.?[0-9]+)\s*(%|px|pt|cm|mm|in)?', dim_value, re.IGNORECASE)
+    if not match:
+        return None
+
+    value = float(match.group(1))
+    unit = (match.group(2) or 'px').lower()
+
+    if unit == 'px':
+        return value * PIXELS_TO_POINTS
+    if unit == 'pt':
+        return value
+    if unit == 'cm':
+        return value * 28.35
+    if unit == 'mm':
+        return value * 2.835
+    if unit == 'in':
+        return value * 72
+    if unit == '%':
+        return (value / 100.0) * MAX_IMAGE_WIDTH
+    return None
+
+
+def get_alignment(attrs_dict: Optional[Dict[str, str]]) -> int:
+    """Determine paragraph alignment from attributes, classes, or styles."""
+    if not attrs_dict:
+        return TA_JUSTIFY
+
+    align_attr = (attrs_dict.get('align') or '').strip().lower()
+    if align_attr == 'center':
+        return TA_CENTER
+    if align_attr == 'right':
+        return TA_RIGHT
+    if align_attr == 'left':
+        return TA_LEFT
+    if align_attr == 'justify':
+        return TA_JUSTIFY
+
+    style_attr = attrs_dict.get('style') or ''
+    style_match = re.search(r'text-align\s*:\s*(left|center|right|justify)', style_attr, re.IGNORECASE)
+    if style_match:
+        value = style_match.group(1).lower()
+        if value == 'center':
+            return TA_CENTER
+        if value == 'right':
+            return TA_RIGHT
+        if value == 'left':
+            return TA_LEFT
+        if value == 'justify':
+            return TA_JUSTIFY
+
+    class_attr = attrs_dict.get('class') or ''
+    if re.search(r'\b(center|centered)\b', class_attr, re.IGNORECASE):
+        return TA_CENTER
+
+    return TA_JUSTIFY
 
 
 class ConversionError(Exception):
@@ -211,14 +363,13 @@ class EPUBToPDFConverter:
             ConversionError: If conversion fails
         """
         try:
-            # Parse EPUB
+            _initialize_fonts()
+
             epub_book = self._parse_epub(epub_content)
             self.logger.info("EPUB loaded")
-            
-            # Extract images from EPUB with minimal logging
+
             epub_images = self._extract_images(epub_book)
 
-            # Create PDF in memory
             pdf_buffer = io.BytesIO()
             doc = SimpleDocTemplate(
                 pdf_buffer,
@@ -228,15 +379,10 @@ class EPUBToPDFConverter:
             )
             story = []
 
-            # Check if CJK fonts were successfully registered
             wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
             font_name = 'WenQuanYi' if wqy_registered else 'Helvetica'
-            # If we didn't register family for Helvetica (built-in), we might need direct font names, 
-            # but Helvetica is standard.
-            
+
             styles = getSampleStyleSheet()
-            
-            # Define formatted styles
             styles.add(ParagraphStyle(
                 'CJKHeading1',
                 fontName=font_name,
@@ -245,9 +391,9 @@ class EPUBToPDFConverter:
                 spaceAfter=12,
                 spaceBefore=12,
                 textColor=colors.HexColor('#000000'),
-                fontBold=True
+                fontBold=True,
+                alignment=TA_JUSTIFY,
             ))
-            
             styles.add(ParagraphStyle(
                 'CJKHeading2',
                 fontName=font_name,
@@ -255,9 +401,9 @@ class EPUBToPDFConverter:
                 leading=20,
                 spaceAfter=10,
                 spaceBefore=10,
-                fontBold=True
+                fontBold=True,
+                alignment=TA_JUSTIFY,
             ))
-            
             styles.add(ParagraphStyle(
                 'CJKHeading3',
                 fontName=font_name,
@@ -265,19 +411,18 @@ class EPUBToPDFConverter:
                 leading=18,
                 spaceAfter=8,
                 spaceBefore=8,
-                fontBold=True
+                fontBold=True,
+                alignment=TA_JUSTIFY,
             ))
-            
             styles.add(ParagraphStyle(
                 'CJKBody',
                 fontName=font_name,
                 fontSize=11,
                 leading=16,
                 spaceAfter=6,
-                alignment=4,  # Justify
+                alignment=TA_JUSTIFY,
                 firstLineIndent=0.25 * inch,
             ))
-            
             styles.add(ParagraphStyle(
                 'CJKList',
                 fontName=font_name,
@@ -285,18 +430,17 @@ class EPUBToPDFConverter:
                 leading=14,
                 leftIndent=20,
                 spaceAfter=4,
+                alignment=TA_LEFT,
             ))
-            
+
             if not wqy_registered:
                 self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
 
-            # Add book title if available
             if epub_book.title:
                 try:
                     title_text = epub_book.title
                     if isinstance(title_text, (tuple, list)):
                         title_text = title_text[0]
-                    
                     if title_text:
                         story.append(Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading1']))
                         story.append(Spacer(1, 0.3 * inch))
@@ -307,86 +451,137 @@ class EPUBToPDFConverter:
             chapters_processed = 0
             images_added = 0
 
-            # Process chapters
             for item in epub_book.spine:
-                # Spine items are typically tuples like ('chapter_id', 'yes'/'no')
-                if isinstance(item, tuple):
-                    item_id = item[0]
-                else:
-                    item_id = item
+                item_id = item[0] if isinstance(item, tuple) else item
 
                 try:
                     chapter = epub_book.get_item_with_id(item_id)
-                    if chapter is None:
+                    if chapter is None or not isinstance(chapter, epub.EpubHtml):
                         continue
-                    
-                    # Only process HTML/document items
-                    if not isinstance(chapter, epub.EpubHtml):
-                        continue
-                    
+
                     chapters_processed += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
-                    
-                    # Extract structured content
+
                     extractor = FormattingPreservingExtractor()
                     extractor.feed(content)
                     extractor.close()
 
-                    # Add elements to PDF
-                    for elem_type, elem_data in extractor.elements:
+                    for element in extractor.elements:
                         try:
-                            # Escape text content
-                            safe_data = self._escape_text(elem_data)
-                            
-                            if elem_type == 'h1':
-                                p = Paragraph(safe_data, styles['CJKHeading1'])
-                                story.append(p)
-                            elif elem_type == 'h2':
-                                p = Paragraph(safe_data, styles['CJKHeading2'])
-                                story.append(p)
-                            elif elem_type in ['h3', 'h4', 'h5', 'h6']:
-                                p = Paragraph(safe_data, styles['CJKHeading3'])
-                                story.append(p)
-                            elif elem_type == 'li':
-                                p = Paragraph(f"<b>•</b> {safe_data}", styles['CJKList'])
-                                story.append(p)
-                            elif elem_type == 'img':
-                                img_name = elem_data.replace('../', '').split('/')[-1]
-                                found_img = False
-                                for epub_img_name, img_data in epub_images.items():
-                                    if img_name and (img_name in epub_img_name or epub_img_name.endswith(img_name)):
+                            if not element:
+                                continue
+
+                            elem_type = element[0]
+
+                            if elem_type == 'img':
+                                img_data = element[1] if len(element) > 1 else {}
+                                if not isinstance(img_data, dict):
+                                    continue
+
+                                img_src = (img_data.get('src') or '').replace('../', '')
+                                img_name = img_src.split('/')[-1]
+                                if not img_name:
+                                    continue
+
+                                matched = False
+                                for epub_img_name, raw_img in epub_images.items():
+                                    if img_name not in epub_img_name and not epub_img_name.endswith(img_name):
+                                        continue
+
+                                    try:
+                                        width = parse_dimension(img_data.get('width'))
+                                        height = parse_dimension(img_data.get('height'))
+
+                                        orig_width = None
+                                        orig_height = None
                                         try:
-                                            img_buffer = io.BytesIO(img_data)
-                                            # Using fixed size for now as per reference implementation
-                                            img = Image(img_buffer, width=4*inch, height=3*inch)
-                                            story.append(img)
-                                            story.append(Spacer(1, 0.15*inch))
-                                            images_added += 1
-                                            self.logger.info(f"Added image to PDF: {epub_img_name}")
-                                            found_img = True
-                                            break
-                                        except Exception as e:
-                                            self.logger.warning(f"Could not add image {epub_img_name}: {e}")
-                                
-                                if not found_img:
-                                    # Debug log only
-                                    pass
-                            else:  # Regular paragraph
-                                p = Paragraph(safe_data, styles['CJKBody'])
-                                story.append(p)
-                                story.append(Spacer(1, 0.08*inch))
+                                            reader = ImageReader(io.BytesIO(raw_img))
+                                            orig_w, orig_h = reader.getSize()
+                                            orig_width = orig_w * PIXELS_TO_POINTS
+                                            orig_height = orig_h * PIXELS_TO_POINTS
+                                        except Exception:
+                                            pass
+
+                                        if width and not height and orig_width and orig_height:
+                                            height = width * (orig_height / max(orig_width, 1))
+                                        elif height and not width and orig_width and orig_height:
+                                            width = height * (orig_width / max(orig_height, 1))
+                                        elif not width and not height:
+                                            if orig_width and orig_height:
+                                                width = orig_width
+                                                height = orig_height
+                                            else:
+                                                width = DEFAULT_IMAGE_WIDTH
+                                                height = DEFAULT_IMAGE_HEIGHT
+
+                                        if width is None:
+                                            width = DEFAULT_IMAGE_WIDTH
+                                        if height is None:
+                                            height = DEFAULT_IMAGE_HEIGHT
+
+                                        if width > MAX_IMAGE_WIDTH:
+                                            ratio = MAX_IMAGE_WIDTH / width
+                                            width = MAX_IMAGE_WIDTH
+                                            height = height * ratio
+
+                                        image_buffer = io.BytesIO(raw_img)
+                                        img = RLImage(image_buffer, width=width, height=height)
+                                        story.append(img)
+                                        story.append(Spacer(1, 0.15 * inch))
+                                        images_added += 1
+                                        self.logger.info(
+                                            f"Added image: {epub_img_name} ({width:.0f}x{height:.0f} pts)"
+                                        )
+                                        matched = True
+                                        break
+                                    except Exception as exc:
+                                        self.logger.warning(f"Could not add image {epub_img_name}: {exc}")
+
+                                if not matched:
+                                    continue
+                            else:
+                                elem_text = element[1]
+                                attrs = element[2] if len(element) > 2 and isinstance(element[2], dict) else {}
+                                if not isinstance(elem_text, str):
+                                    continue
+
+                                safe_data = self._escape_text(elem_text)
+                                if not safe_data:
+                                    continue
+
+                                alignment = get_alignment(attrs)
+
+                                if elem_type == 'h1':
+                                    style = ParagraphStyle('H1Temp', parent=styles['CJKHeading1'], alignment=alignment)
+                                    story.append(Paragraph(safe_data, style))
+                                elif elem_type == 'h2':
+                                    style = ParagraphStyle('H2Temp', parent=styles['CJKHeading2'], alignment=alignment)
+                                    story.append(Paragraph(safe_data, style))
+                                elif elem_type in ['h3', 'h4', 'h5', 'h6']:
+                                    style = ParagraphStyle('H3Temp', parent=styles['CJKHeading3'], alignment=alignment)
+                                    story.append(Paragraph(safe_data, style))
+                                elif elem_type == 'li':
+                                    style = ParagraphStyle('ListTemp', parent=styles['CJKList'], alignment=alignment)
+                                    story.append(Paragraph(f"<b>•</b> {safe_data}", style))
+                                else:
+                                    body_kwargs = {'alignment': alignment}
+                                    if alignment in (TA_CENTER, TA_RIGHT):
+                                        body_kwargs['firstLineIndent'] = 0
+                                    style = ParagraphStyle('BodyTemp', parent=styles['CJKBody'], **body_kwargs)
+                                    story.append(Paragraph(safe_data, style))
+                                    story.append(Spacer(1, 0.08 * inch))
                         except Exception as e:
                             self.logger.warning(f"Failed to add element: {e}")
 
                     story.append(PageBreak())
-                    
                 except Exception as e:
                     self.logger.error(f"Error in chapter {item_id}: {e}")
                     continue
 
-            self.logger.info(f"Conversion complete: {chapters_processed} chapters, {images_added} images added")
+            self.logger.info(
+                f"Conversion complete: {chapters_processed} chapters, {images_added} images added"
+            )
 
-            # Build the PDF
             doc.build(story)
             pdf_buffer.seek(0)
             return pdf_buffer.getvalue()
