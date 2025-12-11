@@ -451,6 +451,9 @@ class EPUBToPDFConverter:
             self.logger.info("Processing chapters...")
             chapters_processed = 0
             images_added = 0
+            center_count = 0
+            bold_count = 0
+            color_count = 0
 
             for item in epub_book.spine:
                 item_id = item[0] if isinstance(item, tuple) else item
@@ -541,7 +544,23 @@ class EPUBToPDFConverter:
                                 if not safe_data:
                                     continue
 
+                                # Check for bold and color
+                                has_bold = '<b>' in elem_text or '<strong>' in elem_text
+                                has_color = '<font color' in elem_text
+                                
+                                if has_bold:
+                                    bold_count += 1
+                                    self.logger.debug(f"Bold text detected: {elem_text[:50]}")
+                                if has_color:
+                                    color_count += 1
+                                    self.logger.debug(f"Color text detected: {elem_text[:50]}")
+
                                 alignment = get_alignment(attrs)
+                                
+                                # Check for center alignment
+                                if alignment == TA_CENTER:
+                                    center_count += 1
+                                    self.logger.debug(f"Center text detected: {elem_text[:50]}")
 
                                 if elem_type == 'h1':
                                     style = ParagraphStyle('H1Temp', parent=styles['CJKHeading1'], alignment=alignment)
@@ -571,7 +590,7 @@ class EPUBToPDFConverter:
                     continue
 
             self.logger.info(
-                f"Conversion complete: {chapters_processed} chapters, {images_added} images added"
+                f"Done: {chapters_processed} chapters, {images_added} images, {center_count} centered, {bold_count} bold, {color_count} colored"
             )
 
             doc.build(story)
