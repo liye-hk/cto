@@ -24,14 +24,9 @@ ALLOWED_INLINE_TAG_PATTERN = re.compile(
     r'(?i)(</?(?:b|strong|i|em|u|font)(?:\s+[^<>]*?)?>|<br\s*/?>)'
 )
 
-PIXELS_TO_POINTS = 0.75
-# Page dimensions for standard letter (8.5 x 11 inches) with 0.5 inch margins
-PAGE_WIDTH = 8.5 * inch
-PAGE_HEIGHT = 11 * inch
-PAGE_MARGIN = 0.5 * inch
-MAX_IMAGE_WIDTH = PAGE_WIDTH - 2 * PAGE_MARGIN  # 7.5 inches
-MAX_IMAGE_HEIGHT = PAGE_HEIGHT - 2 * PAGE_MARGIN  # 10 inches
-MIN_IMAGE_SIZE = 1.0 * inch
+# Safe maximum image dimensions (smaller than page limits)
+MAX_IMG_WIDTH = 6.0 * inch  # 6 inches (safer than full page width)
+MAX_IMG_HEIGHT = 8.0 * inch  # 8 inches (safer than full page height)
 DEFAULT_IMAGE_WIDTH = 4 * inch
 DEFAULT_IMAGE_HEIGHT = 3 * inch
 
@@ -495,70 +490,44 @@ class EPUBToPDFConverter:
                                         continue
 
                                     try:
-                                        width = parse_dimension(img_data.get('width'))
-                                        height = parse_dimension(img_data.get('height'))
-
-                                        orig_width = None
-                                        orig_height = None
+                                        # Try to load image to get actual size using PIL
                                         try:
-                                            reader = ImageReader(io.BytesIO(raw_img))
-                                            orig_w, orig_h = reader.getSize()
-                                            orig_width = orig_w * PIXELS_TO_POINTS
-                                            orig_height = orig_h * PIXELS_TO_POINTS
-                                        except Exception:
-                                            pass
-
-                                        if width and not height and orig_width and orig_height:
-                                            height = width * (orig_height / max(orig_width, 1))
-                                        elif height and not width and orig_width and orig_height:
-                                            width = height * (orig_width / max(orig_height, 1))
-                                        elif not width and not height:
-                                            if orig_width and orig_height:
-                                                width = orig_width
-                                                height = orig_height
-                                            else:
-                                                width = DEFAULT_IMAGE_WIDTH
-                                                height = DEFAULT_IMAGE_HEIGHT
-
-                                        if width is None:
+                                            from PIL import Image as PILImage
+                                            img_pil = PILImage.open(io.BytesIO(raw_img))
+                                            pil_width, pil_height = img_pil.size
+                                            
+                                            # Convert pixels to inches (assume 96 dpi)
+                                            width = pil_width / 96.0 * inch
+                                            height = pil_height / 96.0 * inch
+                                            
+                                            self.logger.info(f"Image original size: {pil_width}x{pil_height}px ({width:.1f}x{height:.1f}in)")
+                                        except Exception as e:
+                                            self.logger.warning(f"Could not read image dimensions: {e}, using default")
                                             width = DEFAULT_IMAGE_WIDTH
-                                        if height is None:
                                             height = DEFAULT_IMAGE_HEIGHT
-
-                                        # Scale down if too large, maintaining aspect ratio
-                                        scale_factor = 1.0
                                         
-                                        if width > MAX_IMAGE_WIDTH:
-                                            scale_factor = MAX_IMAGE_WIDTH / width
+                                        # Scale down if exceeds safe limits
+                                        if width > MAX_IMG_WIDTH or height > MAX_IMG_HEIGHT:
+                                            # Calculate scale factor
+                                            scale_w = MAX_IMG_WIDTH / width if width > MAX_IMG_WIDTH else 1.0
+                                            scale_h = MAX_IMG_HEIGHT / height if height > MAX_IMG_HEIGHT else 1.0
+                                            scale = min(scale_w, scale_h)
+                                            
+                                            width = width * scale
+                                            height = height * scale
+                                            self.logger.info(f"Scaled image to: {width:.1f}x{height:.1f}in")
                                         
-                                        if height * scale_factor > MAX_IMAGE_HEIGHT:
-                                            scale_factor = MAX_IMAGE_HEIGHT / height
-                                        
-                                        width = width * scale_factor
-                                        height = height * scale_factor
-                                        
-                                        # Ensure minimum size
-                                        if width < MIN_IMAGE_SIZE:
-                                            ratio = height / width if width > 0 else 1
-                                            width = MIN_IMAGE_SIZE
-                                            height = MIN_IMAGE_SIZE * ratio
-                                            # Re-check max height after minimum size adjustment
-                                            if height > MAX_IMAGE_HEIGHT:
-                                                height = MAX_IMAGE_HEIGHT
-                                                width = height / ratio if ratio > 0 else MIN_IMAGE_SIZE
-
                                         image_buffer = io.BytesIO(raw_img)
                                         img = RLImage(image_buffer, width=width, height=height)
                                         story.append(img)
-                                        story.append(Spacer(1, 0.15 * inch))
+                                        story.append(Spacer(1, 0.1 * inch))
                                         images_added += 1
-                                        self.logger.info(
-                                            f"Added image: {epub_img_name} ({width:.0f}x{height:.0f} pts)"
-                                        )
+                                        self.logger.info(f"✓ Added image: {epub_img_name}")
                                         matched = True
                                         break
-                                    except Exception as exc:
-                                        self.logger.warning(f"Could not add image {epub_img_name}: {exc}")
+                                    except Exception as e:
+                                        self.logger.error(f"✗ Failed to add image {epub_img_name}: {e}")
+                                        continue
 
                                 if not matched:
                                     continue
