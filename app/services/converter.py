@@ -475,18 +475,126 @@ def get_alignment(attrs_dict: Optional[Dict[str, str]]) -> int:
 
 
 def convert_css_classes_to_html(html_content: str) -> str:
-    """Convert CSS class formatting to HTML tags for reportlab."""
-    # Convert <span class="bold">text</span> to <b>text</b>
-    html_content = re.sub(r'<span class="bold">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
-    html_content = re.sub(r'<span class="bold\s+.*?">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
-
-    # Convert <strong class="...">text</strong> to <b>text</b>
-    html_content = re.sub(r'<strong class=".*?">(.*?)</strong>', r'<b>\1</b>', html_content, flags=re.DOTALL)
-
-    # Handle center-aligned paragraphs
-    html_content = re.sub(r'<p class=".*?center.*?">', '<p align="center">', html_content, flags=re.IGNORECASE)
-
+    """Convert CSS class formatting to HTML tags for reportlab.
+    
+    This function converts:
+    1. CSS classes indicating bold (bold, fw-bold, font-bold, strong) to <b> tags
+    2. CSS classes indicating center alignment (center, centered, text-center) to align="center" attribute
+    """
+    
+    # Pattern to match opening tags with class attributes
+    # Matches: <tag class="..." or <tag ... class="..."
+    tag_with_class_pattern = re.compile(
+        r'<(\w+)([^>]*?\s+class="([^"]*)")([^>]*)>',
+        re.IGNORECASE | re.DOTALL
+    )
+    
+    # Process bold classes by wrapping content with <b> tags
+    def wrap_bold_content(html_str):
+        """Wrap content of bold-class elements with <b> tags."""
+        result = []
+        i = 0
+        while i < len(html_str):
+            # Look for opening tags with bold classes
+            match = tag_with_class_pattern.search(html_str, i)
+            if not match:
+                result.append(html_str[i:])
+                break
+            
+            # Add content before the match
+            result.append(html_str[i:match.start()])
+            
+            tag_name = match.group(1).lower()
+            before_class = match.group(2)  # Everything up to and including the space before class
+            class_value = match.group(3)
+            after_class = match.group(4)
+            
+            is_bold = _is_bold_class(class_value)
+            is_center = _is_center_class(class_value)
+            
+            # Only remove class attribute if we're wrapping with <b>
+            # Keep classes for FormattingPreservingExtractor to detect CSS-extracted bold classes
+            if is_bold:
+                new_before_class = re.sub(r'\s+class="[^"]*"', '', before_class)
+            else:
+                new_before_class = before_class
+            
+            # Add align if needed
+            new_after_class = after_class
+            if is_center and 'align' not in new_after_class.lower():
+                new_after_class = ' align="center"' + new_after_class
+            
+            # Build opening tag
+            opening_tag = f'<{tag_name}{new_before_class}{new_after_class}>'
+            result.append(opening_tag)
+            
+            # Find the corresponding closing tag
+            closing_tag = f'</{tag_name}>'
+            closing_pos = html_str.find(closing_tag, match.end())
+            
+            if closing_pos != -1 and is_bold:
+                # Get content between opening and closing tags
+                content = html_str[match.end():closing_pos]
+                
+                # Wrap content with <b> tags
+                result.append('<b>')
+                result.append(content)
+                result.append('</b>')
+                result.append(closing_tag)
+                
+                i = closing_pos + len(closing_tag)
+            else:
+                # No matching closing tag found or not bold, just continue
+                i = match.end()
+        
+        return ''.join(result)
+    
+    # Process the HTML
+    html_content = wrap_bold_content(html_content)
+    
     return html_content
+
+
+def _is_bold_class(class_value: str) -> bool:
+    """Check if a class value indicates bold formatting."""
+    if not class_value:
+        return False
+    
+    class_lower = class_value.lower()
+    
+    # Direct class name matches
+    bold_indicators = {'bold', 'fw-bold', 'font-bold', 'strong', 'font-weight-bold'}
+    class_names = [c.strip() for c in class_lower.split()]
+    
+    if any(name in bold_indicators for name in class_names):
+        return True
+    
+    # Check for "bold" or "strong" as substring
+    if 'bold' in class_lower or 'strong' in class_lower:
+        return True
+    
+    return False
+
+
+def _is_center_class(class_value: str) -> bool:
+    """Check if a class value indicates center alignment."""
+    if not class_value:
+        return False
+    
+    class_lower = class_value.lower()
+    
+    # Direct class name matches
+    center_indicators = {'center', 'centered', 'text-center', 'align-center', 'text-align-center'}
+    class_names = [c.strip() for c in class_lower.split()]
+    
+    if any(name in center_indicators for name in class_names):
+        return True
+    
+    # Check for "center" as substring
+    if 'center' in class_lower:
+        return True
+    
+    return False
 
 
 _CSS_RULE_PATTERN = re.compile(r'([^{}]+)\{([^{}]+)\}', re.DOTALL)
