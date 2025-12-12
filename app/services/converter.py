@@ -381,6 +381,18 @@ class FormattingPreservingExtractor(HTMLParser):
         return None
 
 
+def _remove_nested_bold_tags(html_str: str) -> str:
+    """Remove nested bold tags like <b><b>...</b></b> to avoid duplication.
+    
+    This handles cases where content is already bold due to existing tags.
+    """
+    # Pattern to match nested <b> tags: <b>...<b>...</b>...</b>
+    # This is a simple approach that removes one layer of nesting
+    html_str = re.sub(r'<b>(\s*<b>)', r'\1', html_str)
+    html_str = re.sub(r'(</b>)\s*</b>', r'\1', html_str)
+    return html_str
+
+
 def convert_css_classes_to_html(html_content: str) -> str:
     """Convert CSS class formatting to HTML tags for WeasyPrint.
     
@@ -413,23 +425,52 @@ def convert_css_classes_to_html(html_content: str) -> str:
             has_bold_class = any(_is_bold_class(c) for c in class_names)
             
             if has_bold_class:
-                # Add opening tag (remove bold classes)
+                # Add opening tag (remove bold classes from attribute list)
                 remaining_classes = [c for c in class_names if not _is_bold_class(c)]
+                
+                # Reconstruct opening tag attributes without bold classes
+                # attrs includes ' class="value"' so we need to replace it
                 if remaining_classes:
                     new_class_attr = f' class="{" ".join(remaining_classes)}"'
+                    # Replace the old class attribute with the new one
+                    attrs_without_class = re.sub(
+                        r'\s+class="[^"]*"',
+                        new_class_attr,
+                        attrs,
+                        flags=re.IGNORECASE,
+                        count=1
+                    )
                 else:
-                    new_class_attr = ''
+                    # Remove the class attribute entirely
+                    attrs_without_class = re.sub(
+                        r'\s+class="[^"]*"',
+                        '',
+                        attrs,
+                        flags=re.IGNORECASE,
+                        count=1
+                    )
                 
                 result.append(html_str[i:match.start()])
-                result.append(f'<{tag}{attrs}{remaining_attrs}>')
-                result.append('<b>')
+                result.append(f'<{tag}{attrs_without_class}{remaining_attrs}>')
                 
                 # Find closing tag and wrap content
                 closing_tag = f'</{tag}>'
                 close_pos = html_str.find(closing_tag, match.end())
                 if close_pos != -1:
-                    result.append(html_str[match.end():close_pos])
-                    result.append('</b>')
+                    content_between = html_str[match.end():close_pos]
+                    
+                    # Check if content already has bold tags to avoid nesting
+                    has_bold_tag = bool(re.search(r'<\s*b\s*>|<\s*/\s*b\s*>|<\s*strong\s*>|<\s*/\s*strong\s*>', content_between, re.IGNORECASE))
+                    
+                    if not has_bold_tag:
+                        # Only wrap with <b> if content doesn't already have bold tags
+                        result.append('<b>')
+                        result.append(content_between)
+                        result.append('</b>')
+                    else:
+                        # Content already has bold tags, just add it as-is
+                        result.append(content_between)
+                    
                     result.append(closing_tag)
                     i = close_pos + len(closing_tag)
                 else:
@@ -468,6 +509,9 @@ def convert_css_classes_to_html(html_content: str) -> str:
     # Apply transformations
     result = wrap_bold_content(html_content)
     result = add_center_alignment(result)
+    
+    # Clean up any remaining nested bold tags
+    result = _remove_nested_bold_tags(result)
     
     return result
 
@@ -533,6 +577,9 @@ class EPUBToPDFConverter:
             
             # Build HTML document
             html_content = self._build_html_document(epub_book)
+            
+            # Log first 500 characters for debugging
+            self.logger.debug(f"Generated HTML (first 500 chars):\n{html_content[:500]}")
             
             # Add CJK font support if available
             css_content = CSS_STYLES
@@ -661,15 +708,15 @@ class EPUBToPDFConverter:
                             html_parts.append(f'<p><em>Image: {escape(src)}</em></p>')
                     
                     elif element_type in ['h1', 'h2', 'h3']:
-                        text = escape(element[1])
+                        text = self._escape_text(element[1])
                         html_parts.append(f'<{element_type}>{text}</{element_type}>')
                     
                     elif element_type == 'center':
-                        text = escape(element[1])
+                        text = self._escape_text(element[1])
                         html_parts.append(f'<div align="center">{text}</div>')
                     
                     elif element_type in ['p', 'div', 'li']:
-                        text = escape(element[1])
+                        text = self._escape_text(element[1])
                         html_parts.append(f'<{element_type}>{text}</{element_type}>')
                 
                 # Close chapter section
