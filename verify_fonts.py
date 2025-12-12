@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verification script to test font registration and CJK font usage
+Verification script to test WeasyPrint font support and EPUB conversion
 """
 
 import sys
@@ -11,57 +11,91 @@ sys.path.insert(0, '/home/engine/project')
 
 try:
     from app.services.converter import EPUBToPDFConverter
-    from reportlab.pdfbase import pdfmetrics
+    from weasyprint import HTML, CSS
     
-    print("=== Font Registration Verification ===")
-    print(f"Registered font names: {pdfmetrics.getRegisteredFontNames()}")
+    print("=== WeasyPrint Font Support Verification ===")
     
-    # Check for WenQuanYi fonts
-    wqy_fonts = [name for name in pdfmetrics.getRegisteredFontNames() if 'WenQuanYi' in name]
-    print(f"WenQuanYi fonts registered: {len(wqy_fonts)}")
-    for font in wqy_fonts:
-        print(f"  - {font}")
+    # Check for CJK font files
+    cjk_font_paths = [
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttf',
+    ]
+    
+    available_cjk_fonts = []
+    for path in cjk_font_paths:
+        if os.path.exists(path):
+            available_cjk_fonts.append(path)
+            print(f"Found CJK font: {path}")
+    
+    if available_cjk_fonts:
+        print(f"✓ Found {len(available_cjk_fonts)} CJK font files")
+    else:
+        print("⚠ No CJK fonts found - will use system defaults")
     
     # Initialize converter
     print("\n=== Converter Initialization ===")
     converter = EPUBToPDFConverter()
     print("Converter initialized successfully")
     
-    # Test PDF creation with CJK text
-    print("\n=== PDF Generation Test ===")
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    import io
+    # Test PDF creation with WeasyPrint
+    print("\n=== WeasyPrint PDF Generation Test ===")
     
-    # Create a test PDF to verify font rendering
-    pdf_buffer = io.BytesIO()
-    c = canvas.Canvas(pdf_buffer, pagesize=letter)
+    # Test HTML to PDF conversion
+    test_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {
+                font-family: "DejaVu Sans", Arial, sans-serif;
+                font-size: 14px;
+                margin: 20px;
+            }
+            h1 {
+                font-size: 18px;
+                color: #333;
+            }
+            .cjk-text {
+                font-family: "WenQuanYi", "Noto Sans CJK SC", "Source Han Sans SC", Arial, sans-serif;
+                color: #0066cc;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Font Test Document</h1>
+        <p>Test English text - this should render properly.</p>
+        <p class="cjk-text">测试中文文本 - This should show CJK characters.</p>
+        <p class="cjk-text">日本語テキストテスト - This should show Japanese characters.</p>
+        <p class="cjk-text">한국어 텍스트 테스트 - This should show Korean characters.</p>
+        <p><strong>Bold text test</strong> and <em>italic text test</em>.</p>
+        <p align="center">Centered text test</p>
+    </body>
+    </html>
+    """
     
-    # Test basic text
-    c.setFont("Helvetica", 12)
-    c.drawString(100, 750, "Test English text")
+    try:
+        # Create HTML document and render to PDF
+        html_doc = HTML(string=test_html)
+        pdf_bytes = html_doc.write_pdf()
+        
+        if pdf_bytes and len(pdf_bytes) > 0:
+            print(f"✓ WeasyPrint PDF generation successful ({len(pdf_bytes)} bytes)")
+            print("✓ HTML to PDF rendering working")
+        else:
+            print("✗ PDF generation failed")
+            raise Exception("PDF generation returned empty result")
+            
+    except Exception as e:
+        print(f"✗ WeasyPrint PDF generation failed: {e}")
+        raise
     
-    # Test CJK text if WenQuanYi is available
-    if wqy_fonts:
-        c.setFont("WenQuanYi", 12)
-        c.drawString(100, 730, "测试中文文本")
-        print("CJK font rendering test successful")
-    else:
-        print("CJK fonts not available - testing fallback")
-        c.setFont("Helvetica", 12)
-        c.drawString(100, 730, "CJK Fallback test")
-    
-    c.showPage()
-    c.save()
-    
-    pdf_buffer.seek(0)
-    pdf_content = pdf_buffer.getvalue()
-    print(f"Test PDF generated successfully ({len(pdf_content)} bytes)")
-    
-    print("\n=== Font Verification Complete ===")
-    print("✓ Font registration working")
+    print("\n=== Font & WeasyPrint Verification Complete ===")
+    print("✓ WeasyPrint font support working")
     print("✓ Converter initialization working")
-    print("✓ PDF generation working")
+    print("✓ HTML to PDF generation working")
     
 except Exception as e:
     print(f"❌ Error: {e}")

@@ -101,7 +101,7 @@ The application is built with a stateless architecture, meaning no files are sto
                                                  ↓
                                            ┌─────────────────┐
                                            │    ebooklib     │
-                                           │   reportlab     │
+                                           │   weasyprint    │
                                            └─────────────────┘
 ```
 
@@ -121,7 +121,7 @@ The application is built with a stateless architecture, meaning no files are sto
 3. **Service Layer** (`app/services/`)
    - EPUB parsing via `ebooklib`
    - HTML content processing
-   - PDF generation via `reportlab`
+   - PDF generation via `weasyprint`
    - Memory-efficient streaming
 
 4. **Configuration Layer** (`app/core/`)
@@ -156,9 +156,9 @@ The application is built with a stateless architecture, meaning no files are sto
 - **HTML Parser**: Custom HTML-to-text conversion preserving structure
 
 ### PDF Generation
-- **reportlab 4.0+**: Professional PDF generation with advanced formatting
-- **Paragraph Styles**: Customizable text styling and layout
-- **Page Breaks**: Chapter-based page separation
+- **weasyprint 60.0+**: HTML/CSS to PDF rendering engine
+- **CSS Styling**: Comprehensive text styling and layout via CSS
+- **Page Breaks**: Automatic page separation for chapters
 
 ### Frontend
 - **Jinja2 3.1+**: Modern template engine with async support
@@ -230,7 +230,7 @@ pip install -r requirements.txt
 
 **Verify Installation:**
 ```bash
-pip list | grep -E "(fastapi|uvicorn|ebooklib|reportlab)"
+pip list | grep -E "(fastapi|uvicorn|ebooklib|weasyprint)"
 ```
 
 #### Step 4: Configure Environment
@@ -817,25 +817,26 @@ Current conversion parameters are optimized for general use. To customize:
 Edit `app/services/converter.py`:
 
 ```python
-from reportlab.lib.pagesizes import A4, letter, legal
-
-# Change page size
-doc = SimpleDocTemplate(
-    output_buffer,
-    pagesize=A4  # or letter, (width, height)
-)
+# Update CSS @page rule in converter.py
+CSS_STYLES = """
+@page {
+    margin: 1in;
+    size: A4;  # or letter, (595pt, 842pt) for A4
+}
+"""
 ```
 
 #### Font Settings
 
 ```python
-# Adjust default font
-style = ParagraphStyle(
-    name='default',
-    fontName='Helvetica',
-    fontSize=11,  # Change font size
-    leading=14,   # Line spacing
-)
+# Update CSS font settings
+CSS_STYLES = """
+body {
+    font-family: "DejaVu Sans", Arial, sans-serif;
+    font-size: 14pt;  # Change font size
+    line-height: 1.4;  # Line spacing
+}
+"""
 ```
 
 #### Heading Detection
@@ -1541,7 +1542,7 @@ If you encounter issues not covered here:
 ```bash
 # Environment
 python --version
-pip list | grep -E "(fastapi|uvicorn|ebooklib|reportlab)"
+pip list | grep -E "(fastapi|uvicorn|ebooklib|weasyprint)"
 
 # Error logs
 tail -f app.log  # If logging to file
@@ -1777,7 +1778,7 @@ The backend follows a layered architecture:
 1. HTTP POST to `/api/convert`
 2. File validation (type, size, security)
 3. EPUB parsing and content extraction
-4. PDF generation with reportlab
+4. PDF generation with WeasyPrint
 5. Streaming response to client
 6. Memory cleanup
 

@@ -2,29 +2,16 @@ import io
 import logging
 import os
 import re
+import base64
 from typing import Dict, List, Tuple, Optional
 from html.parser import HTMLParser
 from html import escape
+from pathlib import Path
 
 import ebooklib
 from ebooklib import epub
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib import colors
-from reportlab.platypus import (
-    BaseDocTemplate,
-    Frame,
-    PageTemplate,
-    NextPageTemplate,
-    Paragraph,
-    PageBreak,
-    Spacer,
-    Image as RLImage,
-)
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from weasyprint import HTML, CSS
+from weasyprint.text.fonts import FontConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -32,128 +19,108 @@ ALLOWED_INLINE_TAG_PATTERN = re.compile(
     r'(?i)(</?(?:b|strong|i|em|u|font)(?:\s+[^<>]*?)?>|<br\s*/?>)'
 )
 
-# Constants for dimension conversion
-PIXELS_TO_POINTS = 72.0 / 96.0  # 96 DPI assumption
+# CSS for PDF styling
+CSS_STYLES = """
+@page {
+    margin: 1in;
+    size: letter;
+}
 
-# Safe maximum image dimensions (in inches, not points)
-MAX_IMG_WIDTH = 6.0  # 6 inches (safer than full page width)
-MAX_IMG_HEIGHT = 8.0  # 8 inches (safer than full page height)
-DEFAULT_IMAGE_WIDTH = 4.0  # inches
-DEFAULT_IMAGE_HEIGHT = 3.0  # inches
+body {
+    font-family: "DejaVu Sans", Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.4;
+    text-align: justify;
+    color: black;
+    margin: 0;
+    padding: 0;
+}
 
-# Content page margin definitions
-CONTENT_LEFT_MARGIN = inch
-CONTENT_RIGHT_MARGIN = inch
-CONTENT_TOP_MARGIN = 0.5 * inch
-CONTENT_BOTTOM_MARGIN = 0.5 * inch
+h1 {
+    font-size: 18pt;
+    font-weight: bold;
+    margin: 12pt 0;
+    page-break-after: avoid;
+}
 
-_FONTS_INITIALIZED = False
+h2 {
+    font-size: 16pt;
+    font-weight: bold;
+    margin: 10pt 0;
+    page-break-after: avoid;
+}
 
+h3 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 8pt 0;
+    page-break-after: avoid;
+}
 
-# Register fonts at module initialization
-def _initialize_fonts():
-    """Initialize fonts once at startup."""
+p {
+    margin: 6pt 0;
+    text-indent: 0.25in;
+}
 
-    global _FONTS_INITIALIZED
-    if _FONTS_INITIALIZED:
-        return
+div {
+    margin: 6pt 0;
+}
 
-    def _try_register_ttf(font_name: str, path: str, **kwargs) -> bool:
-        if font_name in pdfmetrics.getRegisteredFontNames():
-            return True
-        if not os.path.exists(path):
-            return False
+li {
+    margin: 4pt 0;
+    margin-left: 20pt;
+}
 
-        try:
-            pdfmetrics.registerFont(TTFont(font_name, path, **kwargs))
-            logger.info(f"Registered font: {font_name} -> {path}")
-            return True
-        except TypeError:
-            # Older reportlab versions may not support subfontIndex
-            try:
-                pdfmetrics.registerFont(TTFont(font_name, path))
-                logger.info(f"Registered font: {font_name} -> {path}")
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to register font {font_name} ({path}): {e}")
-                return False
-        except Exception as e:
-            logger.warning(f"Failed to register font {font_name} ({path}): {e}")
-            return False
+center {
+    text-align: center;
+}
 
-    def _try_register_family(family: str, normal: str, bold: str) -> None:
-        try:
-            pdfmetrics.registerFontFamily(
-                family,
-                normal=normal,
-                bold=bold,
-                italic=normal,
-                boldItalic=bold,
-            )
-            logger.info(f"Registered font family: {family}")
-        except Exception as e:
-            logger.warning(f"Failed to register font family {family}: {e}")
+b, strong {
+    font-weight: bold;
+}
 
-    # CJK support (WenQuanYi)
-    cjk_candidates = [
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
-        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttf',
-    ]
+i, em {
+    font-style: italic;
+}
 
-    cjk_registered = False
-    for path in cjk_candidates:
-        if not os.path.exists(path):
-            continue
+u {
+    text-decoration: underline;
+}
 
-        if path.lower().endswith('.ttc'):
-            normal_ok = _try_register_ttf('WenQuanYi', path, subfontIndex=0)
-            if not normal_ok:
-                continue
+img {
+    max-width: 100%;
+    height: auto;
+    margin: 12pt 0;
+    page-break-inside: avoid;
+}
 
-            # Many TTC files contain multiple faces; try index 1 for bold.
-            bold_ok = _try_register_ttf('WenQuanYi-Bold', path, subfontIndex=1)
-            if not bold_ok:
-                bold_ok = _try_register_ttf('WenQuanYi-Bold', path, subfontIndex=0)
-            cjk_registered = True
-            break
+/* Chinese/Japanese/Korean font support */
+@font-face {
+    font-family: "WenQuanYi";
+    src: url('/usr/share/fonts/truetype/wqy/wqy-microhei.ttc');
+}
 
-        normal_ok = _try_register_ttf('WenQuanYi', path)
-        if not normal_ok:
-            continue
+.wqy-font {
+    font-family: "WenQuanYi", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+}
+"""
 
-        # Try common bold file naming patterns first.
-        bold_ok = False
-        for bold_path in (
-            path.replace('.ttf', '-Bold.ttf'),
-            path.replace('.ttf', 'Bold.ttf'),
-        ):
-            if _try_register_ttf('WenQuanYi-Bold', bold_path):
-                bold_ok = True
-                break
-        if not bold_ok:
-            _try_register_ttf('WenQuanYi-Bold', path)
+# CJK font support - add fallback if available
+CJK_FONT_PATHS = [
+    '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttf',
+]
 
-        cjk_registered = True
-        break
-
-    if cjk_registered:
-        _try_register_family('WenQuanYi', normal='WenQuanYi', bold='WenQuanYi-Bold')
-    else:
-        logger.warning("WQY fonts not available, CJK characters may not render properly")
-
-    # DejaVu fallback (good Unicode coverage + real bold variant)
-    dejavu_ok = _try_register_ttf('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
-    dejavu_bold_ok = _try_register_ttf('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf')
-    if dejavu_ok and dejavu_bold_ok:
-        _try_register_family('DejaVuSans', normal='DejaVuSans', bold='DejaVuSans-Bold')
-
-    _FONTS_INITIALIZED = True
-
-
-# Call once at module load
-_initialize_fonts()
+def _get_available_cjk_font() -> Optional[str]:
+    """Check if CJK fonts are available and return the path."""
+    for font_path in CJK_FONT_PATHS:
+        if os.path.exists(font_path):
+            logger.info(f"Found CJK font: {font_path}")
+            return font_path
+    logger.warning("No CJK fonts found, CJK characters may not render properly")
+    return None
 
 
 class FormattingPreservingExtractor(HTMLParser):
@@ -197,8 +164,6 @@ class FormattingPreservingExtractor(HTMLParser):
                 self.current_tag = 'div'
             elif tag == 'center':
                 self.current_tag = 'center'
-                attrs_dict = dict(attrs_dict)
-                attrs_dict.setdefault('align', 'center')
             else:
                 self.current_tag = 'p'
             self.current_attrs = dict(attrs_dict)
@@ -244,22 +209,9 @@ class FormattingPreservingExtractor(HTMLParser):
         elif tag == 'img':
             self._flush_text()
             src = attrs_dict.get('src') or ''
-            width = attrs_dict.get('width') or ''
-            height = attrs_dict.get('height') or ''
-            style = attrs_dict.get('style') or ''
-            if not width:
-                width_match = re.search(r'width\s*:\s*([^;]+)', style, re.IGNORECASE)
-                if width_match:
-                    width = width_match.group(1).strip()
-            if not height:
-                height_match = re.search(r'height\s*:\s*([^;]+)', style, re.IGNORECASE)
-                if height_match:
-                    height = height_match.group(1).strip()
             if src:
                 self.elements.append(('img', {
                     'src': src,
-                    'width': width,
-                    'height': height,
                 }))
         else:
             if tag in self.BOLD_WRAPPER_TAGS and tag not in {'b', 'strong'}:
@@ -407,75 +359,8 @@ class FormattingPreservingExtractor(HTMLParser):
         return None
 
 
-def parse_dimension(dim_str: Optional[str]) -> Optional[float]:
-    """Parse a dimension string (e.g. 100px, 10cm, 50%)."""
-    if not dim_str:
-        return None
-
-    dim_value = str(dim_str).strip().strip('"\'')
-    if not dim_value:
-        return None
-
-    dim_value = dim_value.split('!important')[0].strip()
-    match = re.match(r'([0-9]*\.?[0-9]+)\s*(%|px|pt|cm|mm|in)?', dim_value, re.IGNORECASE)
-    if not match:
-        return None
-
-    value = float(match.group(1))
-    unit = (match.group(2) or 'px').lower()
-
-    if unit == 'px':
-        return value * PIXELS_TO_POINTS
-    if unit == 'pt':
-        return value
-    if unit == 'cm':
-        return value * 28.35
-    if unit == 'mm':
-        return value * 2.835
-    if unit == 'in':
-        return value * inch
-    if unit == '%':
-        return (value / 100.0) * MAX_IMG_WIDTH * inch  # Convert percentage of max width to points
-    return None
-
-
-def get_alignment(attrs_dict: Optional[Dict[str, str]]) -> int:
-    """Determine paragraph alignment from attributes, classes, or styles."""
-    if not attrs_dict:
-        return TA_JUSTIFY
-
-    align_attr = (attrs_dict.get('align') or '').strip().lower()
-    if align_attr == 'center':
-        return TA_CENTER
-    if align_attr == 'right':
-        return TA_RIGHT
-    if align_attr == 'left':
-        return TA_LEFT
-    if align_attr == 'justify':
-        return TA_JUSTIFY
-
-    style_attr = attrs_dict.get('style') or ''
-    style_match = re.search(r'text-align\s*:\s*(left|center|right|justify)', style_attr, re.IGNORECASE)
-    if style_match:
-        value = style_match.group(1).lower()
-        if value == 'center':
-            return TA_CENTER
-        if value == 'right':
-            return TA_RIGHT
-        if value == 'left':
-            return TA_LEFT
-        if value == 'justify':
-            return TA_JUSTIFY
-
-    class_attr = attrs_dict.get('class') or ''
-    if re.search(r'\b(center|centered)\b', class_attr, re.IGNORECASE):
-        return TA_CENTER
-
-    return TA_JUSTIFY
-
-
 def convert_css_classes_to_html(html_content: str) -> str:
-    """Convert CSS class formatting to HTML tags for reportlab.
+    """Convert CSS class formatting to HTML tags for WeasyPrint.
     
     This function converts:
     1. CSS classes indicating bold (bold, fw-bold, font-bold, strong) to <b> tags
@@ -483,7 +368,6 @@ def convert_css_classes_to_html(html_content: str) -> str:
     """
     
     # Pattern to match opening tags with class attributes
-    # Matches: <tag class="..." or <tag ... class="..."
     tag_with_class_pattern = re.compile(
         r'<(\w+)([^>]*?\s+class="([^"]*)")([^>]*)>',
         re.IGNORECASE | re.DOTALL
@@ -495,630 +379,311 @@ def convert_css_classes_to_html(html_content: str) -> str:
         result = []
         i = 0
         while i < len(html_str):
-            # Look for opening tags with bold classes
             match = tag_with_class_pattern.search(html_str, i)
             if not match:
                 result.append(html_str[i:])
                 break
-            
-            # Add content before the match
-            result.append(html_str[i:match.start()])
-            
-            tag_name = match.group(1).lower()
-            before_class = match.group(2)  # Everything up to and including the space before class
-            class_value = match.group(3)
-            after_class = match.group(4)
-            
-            is_bold = _is_bold_class(class_value)
-            is_center = _is_center_class(class_value)
-            
-            # Only remove class attribute if we're wrapping with <b>
-            # Keep classes for FormattingPreservingExtractor to detect CSS-extracted bold classes
-            if is_bold:
-                new_before_class = re.sub(r'\s+class="[^"]*"', '', before_class)
-            else:
-                new_before_class = before_class
-            
-            # Add align if needed
-            new_after_class = after_class
-            if is_center and 'align' not in new_after_class.lower():
-                new_after_class = ' align="center"' + new_after_class
-            
-            # Build opening tag
-            opening_tag = f'<{tag_name}{new_before_class}{new_after_class}>'
-            result.append(opening_tag)
-            
-            # Find the corresponding closing tag
-            closing_tag = f'</{tag_name}>'
-            closing_pos = html_str.find(closing_tag, match.end())
-            
-            if closing_pos != -1 and is_bold:
-                # Get content between opening and closing tags
-                content = html_str[match.end():closing_pos]
                 
-                # Wrap content with <b> tags
+            tag, attrs, class_value, remaining_attrs = match.groups()
+            class_names = [c.strip().lower() for c in class_value.split() if c.strip()]
+            
+            # Check for bold classes
+            has_bold_class = any(_is_bold_class(c) for c in class_names)
+            
+            if has_bold_class:
+                # Add opening tag (remove bold classes)
+                remaining_classes = [c for c in class_names if not _is_bold_class(c)]
+                if remaining_classes:
+                    new_class_attr = f' class="{" ".join(remaining_classes)}"'
+                else:
+                    new_class_attr = ''
+                
+                result.append(html_str[i:match.start()])
+                result.append(f'<{tag}{attrs}{remaining_attrs}>')
                 result.append('<b>')
-                result.append(content)
-                result.append('</b>')
-                result.append(closing_tag)
                 
-                i = closing_pos + len(closing_tag)
+                # Find closing tag and wrap content
+                closing_tag = f'</{tag}>'
+                close_pos = html_str.find(closing_tag, match.end())
+                if close_pos != -1:
+                    result.append(html_str[match.end():close_pos])
+                    result.append('</b>')
+                    result.append(closing_tag)
+                    i = close_pos + len(closing_tag)
+                else:
+                    # Malformed HTML, just add the match and continue
+                    result.append(html_str[match.end():match.end() + 100] + '...')
+                    i = match.end() + 100
             else:
-                # No matching closing tag found or not bold, just continue
+                result.append(html_str[i:match.end()])
                 i = match.end()
         
         return ''.join(result)
     
-    # Process the HTML
-    html_content = wrap_bold_content(html_content)
+    # Process center classes by adding align attribute
+    def add_center_alignment(html_str):
+        """Add align="center" to elements with center classes."""
+        def replace_tag(match):
+            tag, attrs, class_value, remaining_attrs = match.groups()
+            class_names = [c.strip().lower() for c in class_value.split() if c.strip()]
+            
+            has_center_class = any(_is_center_class(c) for c in class_names)
+            
+            if has_center_class:
+                # Add center alignment
+                if 'align=' in attrs.lower():
+                    # Replace existing align attribute
+                    attrs = re.sub(r'\s+align="[^"]*"', '', attrs, flags=re.IGNORECASE)
+                    attrs = re.sub(r'\s+align=\'[^\']*\'', '', attrs, flags=re.IGNORECASE)
+                    attrs = attrs + f' align="center"'
+                else:
+                    attrs = attrs + f' align="center"'
+            
+            return f'<{tag}{attrs}{remaining_attrs}>'
+        
+        return tag_with_class_pattern.sub(replace_tag, html_str)
     
-    return html_content
-
-
-def _is_bold_class(class_value: str) -> bool:
-    """Check if a class value indicates bold formatting."""
-    if not class_value:
-        return False
+    # Apply transformations
+    result = wrap_bold_content(html_content)
+    result = add_center_alignment(result)
     
-    class_lower = class_value.lower()
+    return result
+
+
+def _is_bold_class(class_name: str) -> bool:
+    """Check if a CSS class name indicates bold text."""
+    class_name = class_name.lower()
+    bold_keywords = ['bold', 'strong', 'fw-bold', 'font-bold', 'weight-bold']
+    return any(keyword in class_name for keyword in bold_keywords)
+
+
+def _is_center_class(class_name: str) -> bool:
+    """Check if a CSS class name indicates center alignment."""
+    class_name = class_name.lower()
+    center_keywords = ['center', 'centered', 'text-center', 'align-center']
+    return any(keyword in class_name for keyword in center_keywords)
+
+
+def extract_bold_classes_from_css(css_content: str) -> set[str]:
+    """Extract CSS class names that imply bold text from CSS content."""
+    bold_classes = set()
     
-    # Direct class name matches
-    bold_indicators = {'bold', 'fw-bold', 'font-bold', 'strong', 'font-weight-bold'}
-    class_names = [c.strip() for c in class_lower.split()]
+    # Pattern to match class selectors with font-weight: bold
+    bold_pattern = re.compile(r'\.([\w-]+)[^{]*\{[^}]*font-weight\s*:\s*bold', re.IGNORECASE)
     
-    if any(name in bold_indicators for name in class_names):
-        return True
+    for match in bold_pattern.finditer(css_content):
+        class_name = match.group(1)
+        bold_classes.add(class_name)
     
-    # Check for "bold" or "strong" as substring
-    if 'bold' in class_lower or 'strong' in class_lower:
-        return True
-    
-    return False
-
-
-def _is_center_class(class_value: str) -> bool:
-    """Check if a class value indicates center alignment."""
-    if not class_value:
-        return False
-    
-    class_lower = class_value.lower()
-    
-    # Direct class name matches
-    center_indicators = {'center', 'centered', 'text-center', 'align-center', 'text-align-center'}
-    class_names = [c.strip() for c in class_lower.split()]
-    
-    if any(name in center_indicators for name in class_names):
-        return True
-    
-    # Check for "center" as substring
-    if 'center' in class_lower:
-        return True
-    
-    return False
-
-
-_CSS_RULE_PATTERN = re.compile(r'([^{}]+)\{([^{}]+)\}', re.DOTALL)
-_CSS_FONT_WEIGHT_PATTERN = re.compile(r'font-weight\s*:\s*([^;]+)', re.IGNORECASE)
-_CSS_FONT_SHORTHAND_BOLD_PATTERN = re.compile(r'font\s*:\s*[^;]*\bbold\b', re.IGNORECASE)
-
-
-def extract_bold_classes_from_css(css_text: str) -> set[str]:
-    """Extract CSS class names that apply bold font-weight."""
-    bold_classes: set[str] = set()
-    if not css_text:
-        return bold_classes
-
-    for selector, declarations in _CSS_RULE_PATTERN.findall(css_text):
-        if _CSS_FONT_SHORTHAND_BOLD_PATTERN.search(declarations):
-            selectors = selector
-        else:
-            match = _CSS_FONT_WEIGHT_PATTERN.search(declarations)
-            if not match:
-                continue
-
-            value = match.group(1).split('!important')[0].strip().lower()
-            if value not in {'bold', 'bolder'}:
-                num_match = re.match(r'\s*([0-9]{3})\b', value)
-                if not num_match:
-                    continue
-                try:
-                    if int(num_match.group(1)) < 600:
-                        continue
-                except ValueError:
-                    continue
-            selectors = selector
-
-        for selector_part in selectors.split(','):
-            part = selector_part.strip()
-            if not part:
-                continue
-            if ' ' in part or any(op in part for op in ('>', '+', '~')):
-                continue
-
-            for class_name in re.findall(r'\.([a-zA-Z0-9_-]+)', part):
-                bold_classes.add(class_name.lower())
-
     return bold_classes
 
 
 class ConversionError(Exception):
-    """Exception raised when conversion fails."""
+    """Custom exception for conversion errors."""
     pass
 
 
 class EPUBToPDFConverter:
-    """Service to convert EPUB files to PDF."""
-
+    """Convert EPUB files to PDF using WeasyPrint."""
+    
     def __init__(self):
-        self.logger = logger
+        self.logger = logging.getLogger(__name__)
+        self.cjk_font_path = _get_available_cjk_font()
 
-    def convert(self, epub_content: bytes) -> bytes:
-        """
-        Convert EPUB content to PDF bytes.
-
-        Args:
-            epub_content: Raw bytes of the EPUB file
-
-        Returns:
-            PDF content as bytes
-
-        Raises:
-            ConversionError: If conversion fails
-        """
+    def convert(self, epub_buffer: io.BytesIO) -> bytes:
+        """Convert EPUB content to PDF."""
         try:
-            _initialize_fonts()
-
-            epub_book = self._parse_epub(epub_content)
-            self.logger.info("EPUB loaded")
-
-            # DEBUG: Print chapter 3, 4, 5 HTML to find formatting
-            debug_count = 0
-            for item in epub_book.spine:
-                item_id = item[0] if isinstance(item, tuple) else item
-                try:
-                    chapter = epub_book.get_item_with_id(item_id)
-                    
-                    # If not found by ID, try to find by filename (common issue with EpubHtml)
-                    if chapter is None:
-                        for book_item in epub_book.get_items():
-                            if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
-                                chapter = book_item
-                                break
-                    
-                    if chapter is None or not isinstance(chapter, epub.EpubHtml):
-                        continue
-                    
-                    debug_count += 1
-                    content = chapter.get_content().decode('utf-8', errors='ignore')
-                    
-                    # Convert CSS classes to HTML tags
-                    content = convert_css_classes_to_html(content)
-                    
-                    # Skip first chapter (usually cover), show chapter 3-5
-                    if debug_count >= 3 and debug_count <= 5:
-                        self.logger.info("=" * 80)
-                        self.logger.info(f"CHAPTER {debug_count} HTML (first 3000 chars):")
-                        self.logger.info("=" * 80)
-                        sample = content[:3000]
-                        sample = sample.replace('\n', ' ')
-                        # Show with markers for important tags
-                        sample = sample.replace('<', '\n<').replace('>', '>\n')
-                        self.logger.info(sample)
-                        self.logger.info("=" * 80)
-                    
-                    if debug_count > 5:
-                        break
-                
-                except Exception as e:
-                    self.logger.error(f"Debug error: {e}")
-                    continue
-
-            epub_images = self._extract_images(epub_book)
-            bold_classes = self._extract_bold_classes(epub_book)
-
-            pdf_buffer = io.BytesIO()
-            story = []
-            title_flowables: List = []
-            title_inserted = False
-
-            registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-            if 'WenQuanYi' in registered_fonts:
-                base_font_name = 'WenQuanYi'
-                bold_font_name = 'WenQuanYi-Bold' if 'WenQuanYi-Bold' in registered_fonts else 'WenQuanYi'
-                cjk_font_available = True
-            elif 'DejaVuSans' in registered_fonts:
-                base_font_name = 'DejaVuSans'
-                bold_font_name = 'DejaVuSans-Bold' if 'DejaVuSans-Bold' in registered_fonts else 'DejaVuSans'
-                cjk_font_available = False
-            else:
-                base_font_name = 'Helvetica'
-                bold_font_name = 'Helvetica-Bold'
-                cjk_font_available = False
-
-            styles = getSampleStyleSheet()
-            styles.add(ParagraphStyle(
-                'CJKHeading1',
-                fontName=bold_font_name,
-                fontSize=18,
-                leading=22,
-                spaceAfter=12,
-                spaceBefore=12,
-                textColor=colors.HexColor('#000000'),
-                alignment=TA_JUSTIFY,
-            ))
-            styles.add(ParagraphStyle(
-                'CJKHeading2',
-                fontName=bold_font_name,
-                fontSize=16,
-                leading=20,
-                spaceAfter=10,
-                spaceBefore=10,
-                alignment=TA_JUSTIFY,
-            ))
-            styles.add(ParagraphStyle(
-                'CJKHeading3',
-                fontName=bold_font_name,
-                fontSize=14,
-                leading=18,
-                spaceAfter=8,
-                spaceBefore=8,
-                alignment=TA_JUSTIFY,
-            ))
-            styles.add(ParagraphStyle(
-                'CJKBody',
-                fontName=base_font_name,
-                fontSize=11,
-                leading=16,
-                spaceAfter=6,
-                alignment=TA_JUSTIFY,
-                firstLineIndent=0.25 * inch,
-            ))
-            styles.add(ParagraphStyle(
-                'CJKList',
-                fontName=base_font_name,
-                fontSize=11,
-                leading=14,
-                leftIndent=20,
-                spaceAfter=4,
-                alignment=TA_LEFT,
-            ))
-
-            if not cjk_font_available:
-                self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
-
-            if epub_book.title:
-                try:
-                    title_text = epub_book.title
-                    if isinstance(title_text, (tuple, list)):
-                        title_text = title_text[0]
-                    if title_text:
-                        title_flowables.extend([
-                            Paragraph(self._escape_text(str(title_text)[:500]), styles['CJKHeading1']),
-                            Spacer(1, 0.3 * inch),
-                        ])
-                except Exception as e:
-                    self.logger.warning(f"Skipped title: {str(e)}")
-
-            self.logger.info("Processing chapters...")
-            chapters_processed = 0
-            images_added = 0
-            center_count = 0
-            bold_count = 0
-            color_count = 0
-            cover_detected = False
-
-            for item in epub_book.spine:
-                item_id = item[0] if isinstance(item, tuple) else item
-
-                try:
-                    # Try to get chapter by ID first
-                    chapter = epub_book.get_item_with_id(item_id)
-                    
-                    # If not found by ID, try to find by filename (common issue with EpubHtml)
-                    if chapter is None:
-                        for book_item in epub_book.get_items():
-                            if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
-                                chapter = book_item
-                                break
-                    
-                    if chapter is None or not isinstance(chapter, epub.EpubHtml):
-                        continue
-
-                    chapters_processed += 1
-                    content = chapter.get_content().decode('utf-8', errors='ignore')
-
-                    content = self._strip_non_content_tags(content)
-
-                    # Convert CSS classes to HTML tags
-                    content = convert_css_classes_to_html(content)
-
-                    extractor = FormattingPreservingExtractor(bold_classes=bold_classes)
-                    extractor.feed(content)
-                    extractor.close()
-
-                    chapter_has_images = any(
-                        element and element[0] == 'img'
-                        for element in extractor.elements
-                    )
-                    chapter_has_text = any(
-                        element
-                        and element[0] != 'img'
-                        and isinstance(element[1], str)
-                        and re.sub(r'<[^>]+>', '', element[1]).strip()
-                        for element in extractor.elements
-                    )
-                    is_cover_candidate = (
-                        chapters_processed == 1
-                        and chapter_has_images
-                        and not chapter_has_text
-                    )
-
-                    if is_cover_candidate and not cover_detected:
-                        self.logger.info("Detected image-only first chapter; using it as cover page")
-                        cover_added = False
-                        for element in extractor.elements:
-                            if not element or element[0] != 'img':
-                                continue
-
-                            img_data = element[1] if len(element) > 1 else {}
-                            if not isinstance(img_data, dict):
-                                continue
-
-                            img_src = (img_data.get('src') or '').replace('../', '')
-                            img_name = img_src.split('/')[-1]
-                            if not img_name:
-                                continue
-
-                            for epub_img_name, raw_img in epub_images.items():
-                                if img_name not in epub_img_name and not epub_img_name.endswith(img_name):
-                                    continue
-
-                                try:
-                                    image_buffer = io.BytesIO(raw_img)
-                                    full_width, full_height = letter
-                                    img = RLImage(
-                                        image_buffer,
-                                        width=full_width,
-                                        height=full_height,
-                                    )
-                                    story.append(img)
-                                    story.append(NextPageTemplate('Content'))
-                                    story.append(PageBreak())
-                                    images_added += 1
-                                    cover_detected = True
-                                    cover_added = True
-                                    self.logger.info(f"✓ Cover image fills first page: {epub_img_name}")
-                                    break
-                                except Exception as e:
-                                    self.logger.error(f"✗ Failed to add cover image {epub_img_name}: {e}")
-
-                            if cover_added:
-                                break
-
-                        if cover_added:
-                            continue
-                        else:
-                            self.logger.warning("Cover chapter detected but no matching image found; falling back to standard layout")
-
-                    if title_flowables and not title_inserted:
-                        story.extend(title_flowables)
-                        title_inserted = True
-
-                    for element in extractor.elements:
-                        try:
-                            if not element:
-                                continue
-
-                            elem_type = element[0]
-
-                            if elem_type == 'img':
-                                img_data = element[1] if len(element) > 1 else {}
-                                if not isinstance(img_data, dict):
-                                    continue
-
-                                img_src = (img_data.get('src') or '').replace('../', '')
-                                img_name = img_src.split('/')[-1]
-                                if not img_name:
-                                    continue
-
-                                matched = False
-                                for epub_img_name, raw_img in epub_images.items():
-                                    if img_name not in epub_img_name and not epub_img_name.endswith(img_name):
-                                        continue
-
-                                    try:
-                                        # Try to load image to get actual size using PIL
-                                        try:
-                                            from PIL import Image as PILImage
-                                            img_pil = PILImage.open(io.BytesIO(raw_img))
-                                            pil_width, pil_height = img_pil.size
-                                            
-                                            # Convert pixels to inches (assume 96 dpi)
-                                            # Formula: inches = pixels / 96
-                                            width_inches = pil_width / 96.0
-                                            height_inches = pil_height / 96.0
-                                            
-                                            self.logger.info(f"Image original: {pil_width}x{pil_height}px = {width_inches:.1f}x{height_inches:.1f}in")
-                                        except Exception as e:
-                                            self.logger.warning(f"Could not read image dimensions: {e}, using default")
-                                            width_inches = DEFAULT_IMAGE_WIDTH
-                                            height_inches = DEFAULT_IMAGE_HEIGHT
-                                        
-                                        # Scale down if exceeds safe limits
-                                        if width_inches > MAX_IMG_WIDTH or height_inches > MAX_IMG_HEIGHT:
-                                            # Calculate scale factor
-                                            scale_w = MAX_IMG_WIDTH / width_inches if width_inches > MAX_IMG_WIDTH else 1.0
-                                            scale_h = MAX_IMG_HEIGHT / height_inches if height_inches > MAX_IMG_HEIGHT else 1.0
-                                            scale = min(scale_w, scale_h)
-                                            
-                                            width_inches = width_inches * scale
-                                            height_inches = height_inches * scale
-                                            self.logger.info(f"Scaled to: {width_inches:.1f}x{height_inches:.1f}in")
-                                        
-                                        # Convert back to points for reportlab
-                                        width = width_inches * inch
-                                        height = height_inches * inch
-                                        
-                                        image_buffer = io.BytesIO(raw_img)
-                                        img = RLImage(image_buffer, width=width, height=height)
-                                        story.append(img)
-                                        story.append(Spacer(1, 0.1 * inch))
-                                        images_added += 1
-                                        self.logger.info(f"✓ Added image: {epub_img_name}")
-                                        matched = True
-                                        break
-                                    except Exception as e:
-                                        self.logger.error(f"✗ Failed to add image {epub_img_name}: {e}")
-                                        continue
-
-                                if not matched:
-                                    continue
-                            else:
-                                elem_text = element[1]
-                                attrs = element[2] if len(element) > 2 and isinstance(element[2], dict) else {}
-                                if not isinstance(elem_text, str):
-                                    continue
-
-                                safe_data = self._escape_text(elem_text)
-                                if not safe_data:
-                                    continue
-
-                                alignment = get_alignment(attrs)
-
-                                # Check for formatting in text content
-                                if '<b>' in safe_data or '<strong>' in safe_data:
-                                    bold_count += 1
-                                    self.logger.info(f"✓ Bold text: {safe_data[:50]}")
-                                if '<font color' in safe_data:
-                                    color_count += 1
-                                    self.logger.info(f"✓ Color text: {safe_data[:50]}")
-
-                                if elem_type == 'h1':
-                                    style = ParagraphStyle('H1Temp', parent=styles['CJKHeading1'], alignment=alignment)
-                                    story.append(Paragraph(safe_data, style))
-                                elif elem_type == 'h2':
-                                    style = ParagraphStyle('H2Temp', parent=styles['CJKHeading2'], alignment=alignment)
-                                    story.append(Paragraph(safe_data, style))
-                                elif elem_type in ['h3', 'h4', 'h5', 'h6']:
-                                    style = ParagraphStyle('H3Temp', parent=styles['CJKHeading3'], alignment=alignment)
-                                    story.append(Paragraph(safe_data, style))
-                                elif elem_type == 'li':
-                                    style = ParagraphStyle('ListTemp', parent=styles['CJKList'], alignment=alignment)
-                                    story.append(Paragraph(f"<b>•</b> {safe_data}", style))
-                                else:
-                                    if alignment == TA_CENTER:
-                                        center_count += 1
-                                        self.logger.info(f"✓ Center text: {safe_data[:50]}")
-                                    
-                                    body_kwargs = {'alignment': alignment}
-                                    if alignment in (TA_CENTER, TA_RIGHT):
-                                        body_kwargs['firstLineIndent'] = 0
-                                    style = ParagraphStyle('BodyTemp', parent=styles['CJKBody'], **body_kwargs)
-                                    story.append(Paragraph(safe_data, style))
-                                    story.append(Spacer(1, 0.08 * inch))
-                        except Exception as e:
-                            self.logger.warning(f"Failed to add element: {e}")
-
-                    story.append(PageBreak())
-                except Exception as e:
-                    self.logger.error(f"Error in chapter {item_id}: {e}")
-                    continue
-
-            if title_flowables and not title_inserted:
-                story.extend(title_flowables)
-                title_inserted = True
-
-            doc = BaseDocTemplate(pdf_buffer, pagesize=letter)
-
-            content_frame = Frame(
-                CONTENT_LEFT_MARGIN,
-                CONTENT_BOTTOM_MARGIN,
-                letter[0] - CONTENT_LEFT_MARGIN - CONTENT_RIGHT_MARGIN,
-                letter[1] - CONTENT_TOP_MARGIN - CONTENT_BOTTOM_MARGIN,
-                leftPadding=0,
-                bottomPadding=0,
-                rightPadding=0,
-                topPadding=0,
-                id='content_frame',
-            )
-
-            if cover_detected:
-                cover_frame = Frame(
-                    0,
-                    0,
-                    letter[0],
-                    letter[1],
-                    leftPadding=0,
-                    bottomPadding=0,
-                    rightPadding=0,
-                    topPadding=0,
-                    id='cover_frame',
-                )
-                doc.addPageTemplates([
-                    PageTemplate(id='Cover', frames=[cover_frame]),
-                    PageTemplate(id='Content', frames=[content_frame]),
-                ])
-            else:
-                doc.addPageTemplates([
-                    PageTemplate(id='Content', frames=[content_frame]),
-                ])
-
-            self.logger.info(
-                f"Summary: {chapters_processed} chapters, {images_added} images, {center_count} centered, {bold_count} bold, {color_count} colored"
-            )
-
-            doc.build(story)
-            pdf_buffer.seek(0)
-            return pdf_buffer.getvalue()
-
-        except ConversionError:
-            raise
+            self.logger.info("Starting EPUB to PDF conversion with WeasyPrint")
+            
+            # Read EPUB
+            epub_book = epub.read_epub(epub_buffer)
+            logger.info(f"Read EPUB: {epub_book.title}")
+            
+            # Build HTML content
+            html_content = self._build_html_content(epub_book)
+            
+            # Add CJK font support if available
+            css_content = CSS_STYLES
+            if self.cjk_font_path:
+                # Embed the CJK font in CSS
+                font_dir = os.path.dirname(self.cjk_font_path)
+                css_content += f"""
+@font-face {{
+    font-family: "WenQuanYi";
+    src: url('file://{self.cjk_font_path}');
+}}
+"""
+            
+            # Create CSS object
+            css = CSS(string=css_content)
+            
+            # Create HTML object and render to PDF
+            html_doc = HTML(string=html_content)
+            pdf_bytes = html_doc.write_pdf(stylesheets=[css])
+            
+            self.logger.info("EPUB to PDF conversion completed successfully")
+            return pdf_bytes
+            
         except Exception as e:
-            self.logger.error(f"Conversion error: {str(e)}")
+            self.logger.error(f"Conversion failed: {str(e)}")
             raise ConversionError(f"Failed to convert EPUB to PDF: {str(e)}")
 
-    def _parse_epub(self, epub_content: bytes) -> epub.EpubBook:
-        """
-        Parse EPUB content.
-        """
-        try:
-            epub_buffer = io.BytesIO(epub_content)
-            book = epub.read_epub(epub_buffer)
-            return book
-        except Exception as e:
-            self.logger.error(f"Failed to parse EPUB: {str(e)}")
-            raise ConversionError(f"Invalid EPUB file: {str(e)}")
+    def _build_html_content(self, epub_book: epub.EpubBook) -> str:
+        """Build HTML content from EPUB book."""
+        html_parts = ['<!DOCTYPE html>', '<html><head>', '<meta charset="utf-8">', '<title>']
+        
+        # Add title
+        if epub_book.title:
+            title_text = epub_book.title
+            if isinstance(title_text, (tuple, list)):
+                title_text = title_text[0]
+            html_parts.append(escape(str(title_text)[:500]))
+        
+        html_parts.extend(['</title>', '</head>', '<body>'])
+        
+        # Add title as heading
+        if epub_book.title:
+            title_text = epub_book.title
+            if isinstance(title_text, (tuple, list)):
+                title_text = title_text[0]
+            if title_text:
+                html_parts.append(f'<h1>{escape(str(title_text)[:500])}</h1>')
+        
+        # Extract images and bold classes
+        epub_images = self._extract_images(epub_book)
+        bold_classes = self._extract_bold_classes(epub_book)
+        
+        self.logger.info("Processing chapters...")
+        chapters_processed = 0
+        
+        # Process spine items
+        for item in epub_book.spine:
+            item_id = item[0] if isinstance(item, tuple) else item
+
+            try:
+                # Try to get chapter by ID first
+                chapter = epub_book.get_item_with_id(item_id)
+                
+                # If not found by ID, try to find by filename
+                if chapter is None:
+                    for book_item in epub_book.get_items():
+                        if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
+                            chapter = book_item
+                            break
+                
+                if chapter is None or not isinstance(chapter, epub.EpubHtml):
+                    continue
+
+                chapters_processed += 1
+                content = chapter.get_content().decode('utf-8', errors='ignore')
+
+                content = self._strip_non_content_tags(content)
+
+                # Convert CSS classes to HTML tags
+                content = convert_css_classes_to_html(content)
+
+                extractor = FormattingPreservingExtractor(bold_classes=bold_classes)
+                extractor.feed(content)
+                extractor.close()
+
+                # Process elements
+                for element in extractor.elements:
+                    if not element:
+                        continue
+
+                    element_type = element[0]
+                    
+                    if element_type == 'img':
+                        img_data = element[1]
+                        src = img_data.get('src', '')
+                        
+                        # Try to resolve image from EPUB
+                        resolved_img = self._resolve_image_path(src, epub_images)
+                        if resolved_img:
+                            # Embed image as base64
+                            img_b64 = base64.b64encode(resolved_img).decode('utf-8')
+                            html_parts.append(f'<img src="data:image/png;base64,{img_b64}" alt="Image" />')
+                        else:
+                            html_parts.append(f'<p><em>Image: {escape(src)}</em></p>')
+                    
+                    elif element_type in ['h1', 'h2', 'h3']:
+                        text = escape(element[1])
+                        html_parts.append(f'<{element_type}>{text}</{element_type}>')
+                    
+                    elif element_type == 'center':
+                        text = escape(element[1])
+                        html_parts.append(f'<div align="center">{text}</div>')
+                    
+                    elif element_type in ['p', 'div', 'li']:
+                        text = escape(element[1])
+                        html_parts.append(f'<{element_type}>{text}</{element_type}>')
+            
+            except Exception as e:
+                self.logger.warning(f"Skipping chapter {item_id}: {str(e)}")
+                continue
+
+        html_parts.extend(['</body>', '</html>'])
+        return ''.join(html_parts)
 
     def _extract_images(self, book: epub.EpubBook) -> Dict[str, bytes]:
-        """
-        Extract all images from EPUB book, keyed by the original item name.
-        """
-        images: Dict[str, bytes] = {}
-        image_count = 0
+        """Extract all images from EPUB."""
+        images = {}
+        
         for item in book.get_items():
-            item_type = item.get_type()
-            is_image = item_type == ebooklib.ITEM_IMAGE
+            try:
+                item_type = item.get_type()
+                is_image = False
 
-            if not is_image and isinstance(item_type, str):
-                is_image = 'image' in item_type.lower()
+                # Check if it's an image based on type or content
+                try:
+                    if hasattr(ebooklib, 'ITEM_IMAGE') and item_type == ebooklib.ITEM_IMAGE:
+                        is_image = True
+                except (AttributeError, TypeError):
+                    pass
 
-            if not is_image:
-                media_type = getattr(item, 'media_type', '')
-                if isinstance(media_type, str):
-                    is_image = 'image' in media_type.lower()
+                if not is_image and isinstance(item_type, str):
+                    is_image = 'image' in item_type.lower()
 
-            if is_image:
-                name = item.get_name()
-                images[name] = item.get_content()
-                image_count += 1
-                # Disabled verbose logging as per requirement
-                # self.logger.info(f"Found image: {name}")
+                if not is_image:
+                    media_type = getattr(item, 'media_type', '')
+                    if isinstance(media_type, str):
+                        is_image = 'image' in media_type.lower()
 
-        self.logger.info(f"Found {image_count} images in EPUB")
+                if is_image:
+                    name = item.get_name()
+                    images[name] = item.get_content()
+            except Exception:
+                continue
+
         return images
+
+    def _resolve_image_path(self, src: str, epub_images: Dict[str, bytes]) -> Optional[bytes]:
+        """Resolve image source to content."""
+        if not src:
+            return None
+            
+        # Try direct match first
+        if src in epub_images:
+            return epub_images[src]
+            
+        # Try with different path components
+        src_parts = src.split('/')
+        for i in range(len(src_parts)):
+            candidate = '/'.join(src_parts[i:])
+            if candidate in epub_images:
+                return epub_images[candidate]
+                
+        # Try just the filename
+        filename = src_parts[-1]
+        for img_name in epub_images:
+            if img_name.endswith(filename):
+                return epub_images[img_name]
+        
+        return None
 
     @staticmethod
     def _strip_non_content_tags(html: str) -> str:
+        """Remove script and style tags from HTML."""
         if not html:
             return ''
         html = re.sub(r'(?is)<style[^>]*>.*?</style>', '', html)
@@ -1127,7 +692,7 @@ class EPUBToPDFConverter:
 
     def _extract_bold_classes(self, book: epub.EpubBook) -> set[str]:
         """Extract CSS class names that imply bold text."""
-        bold_classes: set[str] = set()
+        bold_classes = set()
 
         for item in book.get_items():
             try:
@@ -1148,28 +713,4 @@ class EPUBToPDFConverter:
             except Exception:
                 continue
 
-        if bold_classes:
-            self.logger.info(f"Detected {len(bold_classes)} CSS bold classes")
-
         return bold_classes
-
-    def _escape_text(self, text: str) -> str:
-        """
-        Escape text for reportlab while preserving styling tags.
-        """
-        if not text:
-            return ''
-
-        parts: List[str] = []
-        last_index = 0
-        for match in ALLOWED_INLINE_TAG_PATTERN.finditer(text):
-            start, end = match.span()
-            if start > last_index:
-                parts.append(escape(text[last_index:start]))
-            parts.append(match.group(0))
-            last_index = end
-
-        if last_index < len(text):
-            parts.append(escape(text[last_index:]))
-
-        return ''.join(parts)

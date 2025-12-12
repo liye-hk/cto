@@ -3,7 +3,7 @@ Tests for CSS class to HTML tag conversion feature.
 
 This test suite verifies that CSS classes like "bold", "center", etc.
 are properly converted to corresponding HTML tags and attributes
-for ReportLab rendering.
+for WeasyPrint rendering.
 """
 
 import io
