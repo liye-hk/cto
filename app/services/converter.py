@@ -28,8 +28,8 @@ CSS_STYLES = """
 
 body {
     font-family: "DejaVu Sans", Arial, sans-serif;
-    font-size: 11pt;
-    line-height: 1.4;
+    font-size: 13pt;
+    line-height: 1.6;
     text-align: justify;
     color: black;
     margin: 0;
@@ -59,21 +59,21 @@ section.cover-page img {
 }
 
 h1 {
-    font-size: 18pt;
+    font-size: 20pt;
     font-weight: bold;
     margin: 12pt 0;
     page-break-after: avoid;
 }
 
 h2 {
-    font-size: 16pt;
+    font-size: 18pt;
     font-weight: bold;
     margin: 10pt 0;
     page-break-after: avoid;
 }
 
 h3 {
-    font-size: 14pt;
+    font-size: 15pt;
     font-weight: bold;
     margin: 8pt 0;
     page-break-after: avoid;
@@ -93,8 +93,8 @@ li {
     margin-left: 20pt;
 }
 
-center {
-    text-align: center;
+center, .center, .centered, [align="center"] {
+    text-align: center !important;
 }
 
 b, strong {
@@ -107,6 +107,11 @@ i, em {
 
 u {
     text-decoration: underline;
+}
+
+/* Ensure color styles are preserved */
+span[style*="color"], font {
+    /* color already defined in style attribute */
 }
 
 img {
@@ -483,9 +488,9 @@ def convert_css_classes_to_html(html_content: str) -> str:
         
         return ''.join(result)
     
-    # Process center classes by adding align attribute
+    # Process center classes by adding align attribute and style
     def add_center_alignment(html_str):
-        """Add align="center" to elements with center classes."""
+        """Add align="center" and style="text-align: center" to elements with center classes."""
         def replace_tag(match):
             tag, attrs, class_value, remaining_attrs = match.groups()
             class_names = [c.strip().lower() for c in class_value.split() if c.strip()]
@@ -493,7 +498,7 @@ def convert_css_classes_to_html(html_content: str) -> str:
             has_center_class = any(_is_center_class(c) for c in class_names)
             
             if has_center_class:
-                # Add center alignment
+                # Add center alignment with both align attribute and style for maximum compatibility
                 if 'align=' in attrs.lower():
                     # Replace existing align attribute
                     attrs = re.sub(r'\s+align="[^"]*"', '', attrs, flags=re.IGNORECASE)
@@ -501,6 +506,19 @@ def convert_css_classes_to_html(html_content: str) -> str:
                     attrs = attrs + f' align="center"'
                 else:
                     attrs = attrs + f' align="center"'
+                
+                # Also add style with text-align: center for WeasyPrint
+                if 'style=' in attrs.lower():
+                    # Update existing style attribute
+                    attrs = re.sub(
+                        r'style="([^"]*)"',
+                        lambda m: f'style="{m.group(1).rstrip(";")}; text-align: center;"',
+                        attrs,
+                        flags=re.IGNORECASE,
+                        count=1
+                    )
+                else:
+                    attrs = attrs + f' style="text-align: center;"'
             
             return f'<{tag}{attrs}{remaining_attrs}>'
         
@@ -709,7 +727,13 @@ class EPUBToPDFConverter:
                     
                     elif element_type in ['h1', 'h2', 'h3']:
                         text = self._escape_text(element[1])
-                        html_parts.append(f'<{element_type}>{text}</{element_type}>')
+                        attrs = element[2] if len(element) > 2 else {}
+                        # Build attributes string
+                        attrs_str = ''
+                        if attrs:
+                            for key, value in attrs.items():
+                                attrs_str += f' {key}="{value}"'
+                        html_parts.append(f'<{element_type}{attrs_str}>{text}</{element_type}>')
                     
                     elif element_type == 'center':
                         text = self._escape_text(element[1])
@@ -717,7 +741,13 @@ class EPUBToPDFConverter:
                     
                     elif element_type in ['p', 'div', 'li']:
                         text = self._escape_text(element[1])
-                        html_parts.append(f'<{element_type}>{text}</{element_type}>')
+                        attrs = element[2] if len(element) > 2 else {}
+                        # Build attributes string
+                        attrs_str = ''
+                        if attrs:
+                            for key, value in attrs.items():
+                                attrs_str += f' {key}="{value}"'
+                        html_parts.append(f'<{element_type}{attrs_str}>{text}</{element_type}>')
                 
                 # Close chapter section
                 html_parts.append('</section>')
@@ -754,13 +784,13 @@ class EPUBToPDFConverter:
         escaped = escaped.replace('&lt;br/&gt;', '<br/>')
         escaped = escaped.replace('&lt;br /&gt;', '<br />')
         
-        # Handle font tags with attributes
+        # Handle font tags with color attributes - convert to span with style
         escaped = re.sub(
             r'&lt;font color=&quot;([^&]*?)&quot;&gt;',
-            r'<font color="\1">',
+            r'<span style="color: \1;">',
             escaped
         )
-        escaped = escaped.replace('&lt;/font&gt;', '</font>')
+        escaped = escaped.replace('&lt;/font&gt;', '</span>')
         
         return escaped
 

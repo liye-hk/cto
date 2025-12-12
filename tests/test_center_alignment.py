@@ -57,7 +57,7 @@ def test_center_alignment_in_mixed_content():
             element_type, text, attrs = element
             if element_type == 'center':
                 center_count += 1
-            elif 'align="center"' in attrs.get('style', ''):
+            elif 'text-align: center' in attrs.get('style', ''):
                 center_count += 1
             elif attrs.get('align') == 'center':
                 center_count += 1
