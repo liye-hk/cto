@@ -1,0 +1,51 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting weasyprint
+  Downloading weasyprint-67.0-py3-none-any.whl.metadata (3.7 kB)
+Collecting pydyf>=0.11.0 (from weasyprint)
+  Downloading pydyf-0.12.1-py3-none-any.whl.metadata (2.5 kB)
+Collecting cffi>=0.6 (from weasyprint)
+  Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
+Collecting tinyhtml5>=2.0.0b1 (from weasyprint)
+  Downloading tinyhtml5-2.0.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting tinycss2>=1.5.0 (from weasyprint)
+  Downloading tinycss2-1.5.1-py3-none-any.whl.metadata (3.0 kB)
+Collecting cssselect2>=0.8.0 (from weasyprint)
+  Downloading cssselect2-0.8.0-py3-none-any.whl.metadata (2.9 kB)
+Collecting Pyphen>=0.9.1 (from weasyprint)
+  Downloading pyphen-0.17.2-py3-none-any.whl.metadata (3.2 kB)
+Collecting Pillow>=9.1.0 (from weasyprint)
+  Downloading pillow-12.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (8.8 kB)
+Collecting fonttools>=4.59.2 (from fonttools[woff]>=4.59.2->weasyprint)
+  Downloading fonttools-4.61.0-cp312-cp312-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl.metadata (113 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 113.2/113.2 kB 2.9 MB/s eta 0:00:00
+Collecting pycparser (from cffi>=0.6->weasyprint)
+  Downloading pycparser-2.23-py3-none-any.whl.metadata (993 bytes)
+Collecting webencodings (from cssselect2>=0.8.0->weasyprint)
+  Downloading webencodings-0.5.1-py2.py3-none-any.whl.metadata (2.1 kB)
+Collecting brotli>=1.0.1 (from fonttools[woff]>=4.59.2->weasyprint)
+  Downloading brotli-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (6.1 kB)
+Collecting zopfli>=0.1.4 (from fonttools[woff]>=4.59.2->weasyprint)
+  Downloading zopfli-0.4.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (3.5 kB)
+Downloading weasyprint-67.0-py3-none-any.whl (316 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 316.3/316.3 kB 12.8 MB/s eta 0:00:00
+Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (219 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 219.6/219.6 kB 6.3 MB/s eta 0:00:00
+Downloading cssselect2-0.8.0-py3-none-any.whl (15 kB)
+Downloading fonttools-4.61.0-cp312-cp312-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl (4.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.9/4.9 MB 74.3 MB/s eta 0:00:00
+Downloading pillow-12.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 99.7 MB/s eta 0:00:00
+Downloading pydyf-0.12.1-py3-none-any.whl (8.0 kB)
+Downloading pyphen-0.17.2-py3-none-any.whl (2.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 78.5 MB/s eta 0:00:00
+Downloading tinycss2-1.5.1-py3-none-any.whl (28 kB)
+Downloading tinyhtml5-2.0.0-py3-none-any.whl (39 kB)
+Downloading brotli-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (1.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 90.2 MB/s eta 0:00:00
+Downloading webencodings-0.5.1-py2.py3-none-any.whl (11 kB)
+Downloading zopfli-0.4.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (847 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 847.1/847.1 kB 65.0 MB/s eta 0:00:00
+Downloading pycparser-2.23-py3-none-any.whl (118 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 118.1/118.1 kB 13.8 MB/s eta 0:00:00
+Installing collected packages: webencodings, brotli, zopfli, tinyhtml5, tinycss2, Pyphen, pydyf, pycparser, Pillow, fonttools, cssselect2, cffi, weasyprint
+Successfully installed Pillow-12.0.0 Pyphen-0.17.2 brotli-1.2.0 cffi-2.0.0 cssselect2-0.8.0 fonttools-4.61.0 pycparser-2.23 pydyf-0.12.1 tinycss2-1.5.1 tinyhtml5-2.0.0 weasyprint-67.0 webencodings-0.5.1 zopfli-0.4.0
