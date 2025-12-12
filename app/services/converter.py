@@ -36,6 +36,28 @@ body {
     padding: 0;
 }
 
+section.chapter {
+    break-after: page;
+}
+
+section.chapter:last-child {
+    break-after: auto;
+}
+
+section.cover-page {
+    page-break-after: always;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+section.cover-page img {
+    max-width: 100%;
+    max-height: 100%;
+    page-break-inside: avoid;
+}
+
 h1 {
     font-size: 18pt;
     font-weight: bold;
@@ -490,17 +512,27 @@ class EPUBToPDFConverter:
         self.logger = logging.getLogger(__name__)
         self.cjk_font_path = _get_available_cjk_font()
 
-    def convert(self, epub_buffer: io.BytesIO) -> bytes:
-        """Convert EPUB content to PDF."""
+    def convert(self, epub_content) -> bytes:
+        """Convert EPUB content to PDF.
+        
+        Args:
+            epub_content: Either bytes or an io.BytesIO object containing EPUB data.
+        """
         try:
             self.logger.info("Starting EPUB to PDF conversion with WeasyPrint")
+            
+            # Convert bytes to BytesIO if needed
+            if isinstance(epub_content, bytes):
+                epub_buffer = io.BytesIO(epub_content)
+            else:
+                epub_buffer = epub_content
             
             # Read EPUB
             epub_book = epub.read_epub(epub_buffer)
             logger.info(f"Read EPUB: {epub_book.title}")
             
-            # Build HTML content
-            html_content = self._build_html_content(epub_book)
+            # Build HTML document
+            html_content = self._build_html_document(epub_book)
             
             # Add CJK font support if available
             css_content = CSS_STYLES
@@ -517,9 +549,10 @@ class EPUBToPDFConverter:
             # Create CSS object
             css = CSS(string=css_content)
             
-            # Create HTML object and render to PDF
+            # Create HTML object and render to PDF with FontConfiguration
+            font_config = FontConfiguration()
             html_doc = HTML(string=html_content)
-            pdf_bytes = html_doc.write_pdf(stylesheets=[css])
+            pdf_bytes = html_doc.write_pdf(stylesheets=[css], font_config=font_config)
             
             self.logger.info("EPUB to PDF conversion completed successfully")
             return pdf_bytes
@@ -528,8 +561,18 @@ class EPUBToPDFConverter:
             self.logger.error(f"Conversion failed: {str(e)}")
             raise ConversionError(f"Failed to convert EPUB to PDF: {str(e)}")
 
-    def _build_html_content(self, epub_book: epub.EpubBook) -> str:
-        """Build HTML content from EPUB book."""
+    def _build_html_document(self, epub_book: epub.EpubBook) -> str:
+        """Build complete HTML document from EPUB book.
+        
+        This is the main helper method for building the HTML document from an EPUB.
+        It's exposed to allow tests to inspect the generated HTML structure.
+        
+        Process:
+        1. Parse EPUB metadata and spine items
+        2. Detect cover image via metadata or first image-only chapter
+        3. Collect HTML content and binary resources
+        4. Generate full HTML document with proper CSS-based pagination
+        """
         html_parts = ['<!DOCTYPE html>', '<html><head>', '<meta charset="utf-8">', '<title>']
         
         # Add title
@@ -541,6 +584,18 @@ class EPUBToPDFConverter:
         
         html_parts.extend(['</title>', '</head>', '<body>'])
         
+        # Extract images and bold classes early so we can detect cover
+        epub_images = self._extract_images(epub_book)
+        bold_classes = self._extract_bold_classes(epub_book)
+        
+        # Detect and add cover page if available
+        cover_image_data = self._detect_cover_image(epub_book, epub_images)
+        if cover_image_data:
+            img_b64 = base64.b64encode(cover_image_data).decode('utf-8')
+            html_parts.append(
+                f'<section class="cover-page"><img src="data:image/png;base64,{img_b64}" alt="Cover" /></section>'
+            )
+        
         # Add title as heading
         if epub_book.title:
             title_text = epub_book.title
@@ -548,10 +603,6 @@ class EPUBToPDFConverter:
                 title_text = title_text[0]
             if title_text:
                 html_parts.append(f'<h1>{escape(str(title_text)[:500])}</h1>')
-        
-        # Extract images and bold classes
-        epub_images = self._extract_images(epub_book)
-        bold_classes = self._extract_bold_classes(epub_book)
         
         self.logger.info("Processing chapters...")
         chapters_processed = 0
@@ -586,6 +637,9 @@ class EPUBToPDFConverter:
                 extractor.feed(content)
                 extractor.close()
 
+                # Start chapter section for proper pagination
+                html_parts.append('<section class="chapter">')
+                
                 # Process elements
                 for element in extractor.elements:
                     if not element:
@@ -617,6 +671,9 @@ class EPUBToPDFConverter:
                     elif element_type in ['p', 'div', 'li']:
                         text = escape(element[1])
                         html_parts.append(f'<{element_type}>{text}</{element_type}>')
+                
+                # Close chapter section
+                html_parts.append('</section>')
             
             except Exception as e:
                 self.logger.warning(f"Skipping chapter {item_id}: {str(e)}")
@@ -624,7 +681,104 @@ class EPUBToPDFConverter:
 
         html_parts.extend(['</body>', '</html>'])
         return ''.join(html_parts)
+    
+    def _escape_text(self, text: str) -> str:
+        """Escape text while preserving formatting tags.
+        
+        This method escapes HTML special characters but preserves allowed formatting tags
+        like <b>, <strong>, <i>, <em>, <u>, <font>, and <br>.
+        """
+        # First, escape all text
+        escaped = escape(text)
+        
+        # Then, unescape allowed tags and characters
+        # Pattern to match allowed inline formatting tags
+        escaped = escaped.replace('&lt;b&gt;', '<b>')
+        escaped = escaped.replace('&lt;/b&gt;', '</b>')
+        escaped = escaped.replace('&lt;strong&gt;', '<strong>')
+        escaped = escaped.replace('&lt;/strong&gt;', '</strong>')
+        escaped = escaped.replace('&lt;i&gt;', '<i>')
+        escaped = escaped.replace('&lt;/i&gt;', '</i>')
+        escaped = escaped.replace('&lt;em&gt;', '<em>')
+        escaped = escaped.replace('&lt;/em&gt;', '</em>')
+        escaped = escaped.replace('&lt;u&gt;', '<u>')
+        escaped = escaped.replace('&lt;/u&gt;', '</u>')
+        escaped = escaped.replace('&lt;br&gt;', '<br>')
+        escaped = escaped.replace('&lt;br/&gt;', '<br/>')
+        escaped = escaped.replace('&lt;br /&gt;', '<br />')
+        
+        # Handle font tags with attributes
+        escaped = re.sub(
+            r'&lt;font color=&quot;([^&]*?)&quot;&gt;',
+            r'<font color="\1">',
+            escaped
+        )
+        escaped = escaped.replace('&lt;/font&gt;', '</font>')
+        
+        return escaped
 
+    def _detect_cover_image(self, book: epub.EpubBook, epub_images: Dict[str, bytes]) -> Optional[bytes]:
+        """Detect cover image from EPUB metadata or first image-only chapter.
+        
+        Returns:
+            Image bytes if found, None otherwise.
+        """
+        # Try to find cover from metadata
+        try:
+            # Check for cover in metadata
+            cover_id = None
+            if hasattr(book, 'metadata') and book.metadata:
+                # Look for cover image reference in metadata
+                for key in book.metadata.get('cover', []):
+                    if isinstance(key, str):
+                        cover_id = key
+                        break
+            
+            if cover_id:
+                try:
+                    item = book.get_item_with_id(cover_id)
+                    if item:
+                        return item.get_content()
+                except (AttributeError, KeyError):
+                    pass
+            
+            # Try to get cover by common names
+            for item in book.get_items():
+                if isinstance(item, epub.EpubImage):
+                    name = item.get_name().lower()
+                    if 'cover' in name:
+                        return item.get_content()
+        except Exception:
+            pass
+        
+        # Try to detect from first image-only chapter
+        try:
+            for item in book.spine:
+                item_id = item[0] if isinstance(item, tuple) else item
+                chapter = book.get_item_with_id(item_id)
+                
+                if chapter is None:
+                    for book_item in book.get_items():
+                        if isinstance(book_item, epub.EpubHtml) and book_item.get_name() == item_id:
+                            chapter = book_item
+                            break
+                
+                if chapter and isinstance(chapter, epub.EpubHtml):
+                    content = chapter.get_content().decode('utf-8', errors='ignore')
+                    # Check if this is an image-only chapter
+                    if '<img' in content.lower() and len(content) < 1000:
+                        # Try to extract image
+                        img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content, re.IGNORECASE)
+                        if img_match:
+                            src = img_match.group(1)
+                            img_data = self._resolve_image_path(src, epub_images)
+                            if img_data:
+                                return img_data
+        except Exception:
+            pass
+        
+        return None
+    
     def _extract_images(self, book: epub.EpubBook) -> Dict[str, bytes]:
         """Extract all images from EPUB."""
         images = {}
