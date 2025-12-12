@@ -52,62 +52,102 @@ _FONTS_INITIALIZED = False
 
 # Register fonts at module initialization
 def _initialize_fonts():
-    """Initialize fonts once at startup"""
+    """Initialize fonts once at startup."""
+
     global _FONTS_INITIALIZED
     if _FONTS_INITIALIZED:
         return
 
-    # First try to register WQY fonts (CJK support)
-    wqy_fonts = {
-        'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-        'WenQuanYi-Bold': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-    }
-    
-    for name, path in wqy_fonts.items():
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont(name, path))
-                logger.info(f"Registered font: {name}")
-            except Exception as e:
-                logger.warning(f"Failed to register WQY font {name}: {e}")
-    
-    # Try .ttf extension if .ttc fails
-    if not any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames()):
-        wqy_ttf = {
-            'WenQuanYi': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
-            'WenQuanYi-Bold': '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
-        }
-        
-        for name, path in wqy_ttf.items():
-            if os.path.exists(path):
-                try:
-                    pdfmetrics.registerFont(TTFont(name, path))
-                    logger.info(f"Registered WQY TTF font: {name}")
-                except Exception as e:
-                    logger.warning(f"Failed to register WQY TTF font {name}: {e}")
-    
-    # Check if WQY fonts were registered successfully
-    wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
-    
-    if wqy_registered:
-        # Register font family for proper CJK font usage
+    def _try_register_ttf(font_name: str, path: str, **kwargs) -> bool:
+        if font_name in pdfmetrics.getRegisteredFontNames():
+            return True
+        if not os.path.exists(path):
+            return False
+
         try:
-            pdfmetrics.registerFontFamily('WenQuanYi', normal='WenQuanYi', bold='WenQuanYi-Bold', 
-                                         italic='WenQuanYi', boldItalic='WenQuanYi-Bold')
-            logger.info("Registered WenQuanYi font family")
+            pdfmetrics.registerFont(TTFont(font_name, path, **kwargs))
+            logger.info(f"Registered font: {font_name} -> {path}")
+            return True
+        except TypeError:
+            # Older reportlab versions may not support subfontIndex
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, path))
+                logger.info(f"Registered font: {font_name} -> {path}")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to register font {font_name} ({path}): {e}")
+                return False
         except Exception as e:
-            logger.error(f"Failed to register font family: {e}")
+            logger.warning(f"Failed to register font {font_name} ({path}): {e}")
+            return False
+
+    def _try_register_family(family: str, normal: str, bold: str) -> None:
+        try:
+            pdfmetrics.registerFontFamily(
+                family,
+                normal=normal,
+                bold=bold,
+                italic=normal,
+                boldItalic=bold,
+            )
+            logger.info(f"Registered font family: {family}")
+        except Exception as e:
+            logger.warning(f"Failed to register font family {family}: {e}")
+
+    # CJK support (WenQuanYi)
+    cjk_candidates = [
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttf',
+    ]
+
+    cjk_registered = False
+    for path in cjk_candidates:
+        if not os.path.exists(path):
+            continue
+
+        if path.lower().endswith('.ttc'):
+            normal_ok = _try_register_ttf('WenQuanYi', path, subfontIndex=0)
+            if not normal_ok:
+                continue
+
+            # Many TTC files contain multiple faces; try index 1 for bold.
+            bold_ok = _try_register_ttf('WenQuanYi-Bold', path, subfontIndex=1)
+            if not bold_ok:
+                bold_ok = _try_register_ttf('WenQuanYi-Bold', path, subfontIndex=0)
+            cjk_registered = True
+            break
+
+        normal_ok = _try_register_ttf('WenQuanYi', path)
+        if not normal_ok:
+            continue
+
+        # Try common bold file naming patterns first.
+        bold_ok = False
+        for bold_path in (
+            path.replace('.ttf', '-Bold.ttf'),
+            path.replace('.ttf', 'Bold.ttf'),
+        ):
+            if _try_register_ttf('WenQuanYi-Bold', bold_path):
+                bold_ok = True
+                break
+        if not bold_ok:
+            _try_register_ttf('WenQuanYi-Bold', path)
+
+        cjk_registered = True
+        break
+
+    if cjk_registered:
+        _try_register_family('WenQuanYi', normal='WenQuanYi', bold='WenQuanYi-Bold')
     else:
         logger.warning("WQY fonts not available, CJK characters may not render properly")
-        
-        # Ensure at least DejaVu fonts are available for fallback
-        if 'DejaVuSans' not in pdfmetrics.getRegisteredFontNames():
-            try:
-                pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
-                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
-                logger.info("Registered DejaVu fallback fonts")
-            except Exception as e:
-                logger.error(f"Failed to register DejaVu fonts: {e}")
+
+    # DejaVu fallback (good Unicode coverage + real bold variant)
+    dejavu_ok = _try_register_ttf('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
+    dejavu_bold_ok = _try_register_ttf('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf')
+    if dejavu_ok and dejavu_bold_ok:
+        _try_register_family('DejaVuSans', normal='DejaVuSans', bold='DejaVuSans-Bold')
 
     _FONTS_INITIALIZED = True
 
@@ -123,15 +163,22 @@ class FormattingPreservingExtractor(HTMLParser):
     BLOCK_TAGS = HEADING_TAGS.union({'p', 'li', 'div', 'center'})
     LIST_CONTAINER_TAGS = {'ul', 'ol'}
     INLINE_FORMATTING_TAGS = {'b', 'strong', 'i', 'em', 'u'}
-    COLOR_STYLE_PATTERN = re.compile(r'color\s*:\s*([^;]+)', re.IGNORECASE)
 
-    def __init__(self):
+    COLOR_STYLE_PATTERN = re.compile(r'color\s*:\s*([^;]+)', re.IGNORECASE)
+    FONT_WEIGHT_STYLE_PATTERN = re.compile(r'font-weight\s*:\s*([^;]+)', re.IGNORECASE)
+    FONT_SHORTHAND_BOLD_PATTERN = re.compile(r'font\s*:\s*[^;]*\bbold\b', re.IGNORECASE)
+
+    BOLD_WRAPPER_TAGS = BLOCK_TAGS.union({'span', 'font'})
+
+    def __init__(self, bold_classes: Optional[set[str]] = None):
         super().__init__(convert_charrefs=True)
         self.elements: List[Tuple[str, object]] = []
         self.current_text: List[str] = []
         self.current_tag: Optional[str] = None
         self.current_attrs: Dict[str, str] = {}
         self.font_stack: List[bool] = []
+        self.bold_stack: List[bool] = []
+        self.bold_classes = {c.lower() for c in (bold_classes or set())}
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -160,6 +207,10 @@ class FormattingPreservingExtractor(HTMLParser):
             self.current_tag = None
             self.current_attrs = {}
 
+        has_bold = False
+        if tag in self.BOLD_WRAPPER_TAGS and tag not in {'b', 'strong'}:
+            has_bold = self._attrs_indicate_bold(attrs_dict)
+
         if tag in {'b', 'strong'}:
             self.current_text.append('<b>')
         elif tag in {'i', 'em'}:
@@ -174,12 +225,20 @@ class FormattingPreservingExtractor(HTMLParser):
             if color:
                 self.current_text.append(f'<font color="{color}">')
             self.font_stack.append(has_font)
+
+            if has_bold:
+                self.current_text.append('<b>')
+            self.bold_stack.append(has_bold)
         elif tag == 'span':
             color = self._extract_color_from_style(attrs_dict.get('style', ''))
             has_font = bool(color)
             if color:
                 self.current_text.append(f'<font color="{color}">')
             self.font_stack.append(has_font)
+
+            if has_bold:
+                self.current_text.append('<b>')
+            self.bold_stack.append(has_bold)
         elif tag == 'br':
             self.current_text.append('<br/>')
         elif tag == 'img':
@@ -202,6 +261,11 @@ class FormattingPreservingExtractor(HTMLParser):
                     'width': width,
                     'height': height,
                 }))
+        else:
+            if tag in self.BOLD_WRAPPER_TAGS and tag not in {'b', 'strong'}:
+                if has_bold:
+                    self.current_text.append('<b>')
+                self.bold_stack.append(has_bold)
 
     def handle_startendtag(self, tag, attrs):
         tag = tag.lower()
@@ -212,6 +276,13 @@ class FormattingPreservingExtractor(HTMLParser):
 
     def handle_endtag(self, tag):
         tag = tag.lower()
+
+        if tag in self.BOLD_WRAPPER_TAGS and tag not in {'b', 'strong'}:
+            if self.bold_stack:
+                had_bold = self.bold_stack.pop()
+                if had_bold:
+                    self.current_text.append('</b>')
+
         if tag in {'b', 'strong'}:
             self.current_text.append('</b>')
         elif tag in {'i', 'em'}:
@@ -252,6 +323,53 @@ class FormattingPreservingExtractor(HTMLParser):
             attrs_copy = dict(self.current_attrs)
             self.elements.append((self.current_tag or 'p', text, attrs_copy))
         self.current_text = []
+
+    @classmethod
+    def _style_indicates_bold(cls, style: Optional[str]) -> bool:
+        if not style:
+            return False
+
+        if cls.FONT_SHORTHAND_BOLD_PATTERN.search(style):
+            return True
+
+        match = cls.FONT_WEIGHT_STYLE_PATTERN.search(style)
+        if not match:
+            return False
+
+        value = match.group(1).split('!important')[0].strip().lower()
+        if value in {'bold', 'bolder'}:
+            return True
+
+        num_match = re.match(r'\s*([0-9]{3})\b', value)
+        if num_match:
+            try:
+                return int(num_match.group(1)) >= 600
+            except ValueError:
+                return False
+
+        return False
+
+    def _attrs_indicate_bold(self, attrs: Dict[str, str]) -> bool:
+        style = attrs.get('style') or ''
+        if self._style_indicates_bold(style):
+            return True
+
+        class_attr = attrs.get('class') or ''
+        class_names = [c.strip().lower() for c in class_attr.split() if c.strip()]
+        if not class_names:
+            return False
+
+        if any(c in self.bold_classes for c in class_names):
+            return True
+
+        # Heuristic: common class names used for bold text in EPUB/CSS.
+        for c in class_names:
+            if c in {'bold', 'fw-bold', 'font-bold', 'strong'}:
+                return True
+            if 'bold' in c or 'strong' in c:
+                return True
+
+        return False
 
     @classmethod
     def _extract_color_from_style(cls, style: Optional[str]) -> Optional[str]:
@@ -361,14 +479,58 @@ def convert_css_classes_to_html(html_content: str) -> str:
     # Convert <span class="bold">text</span> to <b>text</b>
     html_content = re.sub(r'<span class="bold">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
     html_content = re.sub(r'<span class="bold\s+.*?">(.*?)</span>', r'<b>\1</b>', html_content, flags=re.DOTALL)
-    
+
     # Convert <strong class="...">text</strong> to <b>text</b>
     html_content = re.sub(r'<strong class=".*?">(.*?)</strong>', r'<b>\1</b>', html_content, flags=re.DOTALL)
-    
+
     # Handle center-aligned paragraphs
     html_content = re.sub(r'<p class=".*?center.*?">', '<p align="center">', html_content, flags=re.IGNORECASE)
-    
+
     return html_content
+
+
+_CSS_RULE_PATTERN = re.compile(r'([^{}]+)\{([^{}]+)\}', re.DOTALL)
+_CSS_FONT_WEIGHT_PATTERN = re.compile(r'font-weight\s*:\s*([^;]+)', re.IGNORECASE)
+_CSS_FONT_SHORTHAND_BOLD_PATTERN = re.compile(r'font\s*:\s*[^;]*\bbold\b', re.IGNORECASE)
+
+
+def extract_bold_classes_from_css(css_text: str) -> set[str]:
+    """Extract CSS class names that apply bold font-weight."""
+    bold_classes: set[str] = set()
+    if not css_text:
+        return bold_classes
+
+    for selector, declarations in _CSS_RULE_PATTERN.findall(css_text):
+        if _CSS_FONT_SHORTHAND_BOLD_PATTERN.search(declarations):
+            selectors = selector
+        else:
+            match = _CSS_FONT_WEIGHT_PATTERN.search(declarations)
+            if not match:
+                continue
+
+            value = match.group(1).split('!important')[0].strip().lower()
+            if value not in {'bold', 'bolder'}:
+                num_match = re.match(r'\s*([0-9]{3})\b', value)
+                if not num_match:
+                    continue
+                try:
+                    if int(num_match.group(1)) < 600:
+                        continue
+                except ValueError:
+                    continue
+            selectors = selector
+
+        for selector_part in selectors.split(','):
+            part = selector_part.strip()
+            if not part:
+                continue
+            if ' ' in part or any(op in part for op in ('>', '+', '~')):
+                continue
+
+            for class_name in re.findall(r'\.([a-zA-Z0-9_-]+)', part):
+                bold_classes.add(class_name.lower())
+
+    return bold_classes
 
 
 class ConversionError(Exception):
@@ -444,50 +606,59 @@ class EPUBToPDFConverter:
                     continue
 
             epub_images = self._extract_images(epub_book)
+            bold_classes = self._extract_bold_classes(epub_book)
 
             pdf_buffer = io.BytesIO()
             story = []
             title_flowables: List = []
             title_inserted = False
 
-            wqy_registered = any(name.startswith('WenQuanYi') for name in pdfmetrics.getRegisteredFontNames())
-            font_name = 'WenQuanYi' if wqy_registered else 'Helvetica'
+            registered_fonts = set(pdfmetrics.getRegisteredFontNames())
+            if 'WenQuanYi' in registered_fonts:
+                base_font_name = 'WenQuanYi'
+                bold_font_name = 'WenQuanYi-Bold' if 'WenQuanYi-Bold' in registered_fonts else 'WenQuanYi'
+                cjk_font_available = True
+            elif 'DejaVuSans' in registered_fonts:
+                base_font_name = 'DejaVuSans'
+                bold_font_name = 'DejaVuSans-Bold' if 'DejaVuSans-Bold' in registered_fonts else 'DejaVuSans'
+                cjk_font_available = False
+            else:
+                base_font_name = 'Helvetica'
+                bold_font_name = 'Helvetica-Bold'
+                cjk_font_available = False
 
             styles = getSampleStyleSheet()
             styles.add(ParagraphStyle(
                 'CJKHeading1',
-                fontName=font_name,
+                fontName=bold_font_name,
                 fontSize=18,
                 leading=22,
                 spaceAfter=12,
                 spaceBefore=12,
                 textColor=colors.HexColor('#000000'),
-                fontBold=True,
                 alignment=TA_JUSTIFY,
             ))
             styles.add(ParagraphStyle(
                 'CJKHeading2',
-                fontName=font_name,
+                fontName=bold_font_name,
                 fontSize=16,
                 leading=20,
                 spaceAfter=10,
                 spaceBefore=10,
-                fontBold=True,
                 alignment=TA_JUSTIFY,
             ))
             styles.add(ParagraphStyle(
                 'CJKHeading3',
-                fontName=font_name,
+                fontName=bold_font_name,
                 fontSize=14,
                 leading=18,
                 spaceAfter=8,
                 spaceBefore=8,
-                fontBold=True,
                 alignment=TA_JUSTIFY,
             ))
             styles.add(ParagraphStyle(
                 'CJKBody',
-                fontName=font_name,
+                fontName=base_font_name,
                 fontSize=11,
                 leading=16,
                 spaceAfter=6,
@@ -496,7 +667,7 @@ class EPUBToPDFConverter:
             ))
             styles.add(ParagraphStyle(
                 'CJKList',
-                fontName=font_name,
+                fontName=base_font_name,
                 fontSize=11,
                 leading=14,
                 leftIndent=20,
@@ -504,7 +675,7 @@ class EPUBToPDFConverter:
                 alignment=TA_LEFT,
             ))
 
-            if not wqy_registered:
+            if not cjk_font_available:
                 self.logger.warning("Using fallback fonts - CJK characters may not render correctly")
 
             if epub_book.title:
@@ -548,10 +719,12 @@ class EPUBToPDFConverter:
                     chapters_processed += 1
                     content = chapter.get_content().decode('utf-8', errors='ignore')
 
+                    content = self._strip_non_content_tags(content)
+
                     # Convert CSS classes to HTML tags
                     content = convert_css_classes_to_html(content)
 
-                    extractor = FormattingPreservingExtractor()
+                    extractor = FormattingPreservingExtractor(bold_classes=bold_classes)
                     extractor.feed(content)
                     extractor.close()
 
@@ -835,6 +1008,42 @@ class EPUBToPDFConverter:
 
         self.logger.info(f"Found {image_count} images in EPUB")
         return images
+
+    @staticmethod
+    def _strip_non_content_tags(html: str) -> str:
+        if not html:
+            return ''
+        html = re.sub(r'(?is)<style[^>]*>.*?</style>', '', html)
+        html = re.sub(r'(?is)<script[^>]*>.*?</script>', '', html)
+        return html
+
+    def _extract_bold_classes(self, book: epub.EpubBook) -> set[str]:
+        """Extract CSS class names that imply bold text."""
+        bold_classes: set[str] = set()
+
+        for item in book.get_items():
+            try:
+                item_type = item.get_type()
+                media_type = getattr(item, 'media_type', '')
+
+                is_css = item_type == ebooklib.ITEM_STYLE
+                if not is_css and isinstance(media_type, str):
+                    is_css = media_type.lower().startswith('text/css')
+
+                if is_css:
+                    css = item.get_content().decode('utf-8', errors='ignore')
+                    bold_classes.update(extract_bold_classes_from_css(css))
+                elif isinstance(item, epub.EpubHtml):
+                    html = item.get_content().decode('utf-8', errors='ignore')
+                    for css in re.findall(r'(?is)<style[^>]*>(.*?)</style>', html):
+                        bold_classes.update(extract_bold_classes_from_css(css))
+            except Exception:
+                continue
+
+        if bold_classes:
+            self.logger.info(f"Detected {len(bold_classes)} CSS bold classes")
+
+        return bold_classes
 
     def _escape_text(self, text: str) -> str:
         """
