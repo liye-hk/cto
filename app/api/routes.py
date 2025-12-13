@@ -1,10 +1,11 @@
 import io
 import logging
+import os
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse, JSONResponse
 
 from app.core.config import settings
 from app.services.converter import EPUBToPDFConverter, ConversionError
@@ -12,6 +13,9 @@ from app.services.converter import EPUBToPDFConverter, ConversionError
 router = APIRouter(prefix="/api", tags=["converter"])
 logger = logging.getLogger(__name__)
 converter = EPUBToPDFConverter()
+
+# Path to debug HTML file
+DEBUG_HTML_PATH = '/tmp/debug.html'
 
 
 def get_disposition_header(original_filename: str) -> str:
@@ -136,4 +140,110 @@ async def convert_epub_to_pdf(file: UploadFile = File(...)) -> StreamingResponse
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred during conversion",
+        )
+
+
+@router.get("/debug-html")
+async def get_debug_html():
+    """
+    获取最后生成的 debug.html（作为网页显示）
+    访问: /api/debug-html
+    
+    Returns:
+        HTMLResponse: The debug HTML content to view in browser
+    """
+    try:
+        if os.path.exists(DEBUG_HTML_PATH):
+            with open(DEBUG_HTML_PATH, 'r', encoding='utf-8') as f:
+                content = f.read()
+            logger.info("Debug HTML accessed successfully")
+            return HTMLResponse(content=content)
+        else:
+            logger.warning("Debug HTML file not found")
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "error": "debug.html not found. Convert an EPUB first.",
+                    "info": "上传一个 EPUB 文件进行转换，转换完成后就会生成 debug.html"
+                }
+            )
+    except Exception as e:
+        logger.error(f"Error reading debug HTML: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read debug.html: {str(e)}"
+        )
+
+
+@router.get("/download-debug")
+async def download_debug():
+    """
+    下载 debug.html 文件
+    访问: /api/download-debug
+    
+    Returns:
+        FileResponse: The debug HTML file as a download
+    """
+    try:
+        if os.path.exists(DEBUG_HTML_PATH):
+            logger.info("Debug HTML file download requested")
+            return FileResponse(
+                DEBUG_HTML_PATH,
+                filename='debug.html',
+                media_type='text/html'
+            )
+        else:
+            logger.warning("Debug HTML file not found for download")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="debug.html not found. Convert an EPUB first."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading debug HTML: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download debug.html: {str(e)}"
+        )
+
+
+@router.get("/debug-info")
+async def debug_info():
+    """
+    获取调试信息（文件大小等）
+    访问: /api/debug-info
+    
+    Returns:
+        dict: Debug file information including size, preview, and URLs
+    """
+    try:
+        if os.path.exists(DEBUG_HTML_PATH):
+            size = os.path.getsize(DEBUG_HTML_PATH)
+            # 读取前 1000 字符作为预览
+            with open(DEBUG_HTML_PATH, 'r', encoding='utf-8') as f:
+                preview = f.read(1000)
+            
+            logger.info(f"Debug info accessed: file size {size} bytes")
+            return {
+                "file_exists": True,
+                "file_size": f"{size} bytes",
+                "file_size_kb": f"{size / 1024:.2f} KB",
+                "preview": preview + "...",
+                "download_url": "/api/download-debug",
+                "view_url": "/api/debug-html",
+                "message": "Debug HTML 文件已生成，可以查看或下载"
+            }
+        else:
+            logger.info("Debug info accessed but file doesn't exist yet")
+            return {
+                "file_exists": False,
+                "message": "需要先转换一个 EPUB 文件",
+                "info": "上传 EPUB 文件后，系统会自动生成 debug.html 用于诊断"
+            }
+    except Exception as e:
+        logger.error(f"Error getting debug info: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get debug info: {str(e)}"
         )
