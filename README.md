@@ -730,6 +730,92 @@ async function convertEpub(file) {
 }
 ```
 
+#### Debug HTML Endpoints
+
+The application provides debug endpoints to inspect the generated HTML before PDF conversion. This is useful for diagnosing font size, color, and formatting issues.
+
+##### Get Debug Info
+
+```bash
+GET /api/debug-info
+```
+
+Returns information about the debug HTML file, including size and preview.
+
+**Example:**
+```bash
+curl http://localhost:8000/api/debug-info
+```
+
+**Response (when debug file exists):**
+```json
+{
+  "file_exists": true,
+  "file_size": "45678 bytes",
+  "file_size_kb": "44.61 KB",
+  "preview": "<!DOCTYPE html><html><head>...",
+  "download_url": "/api/download-debug",
+  "view_url": "/api/debug-html",
+  "message": "Debug HTML 文件已生成，可以查看或下载"
+}
+```
+
+**Response (before any conversion):**
+```json
+{
+  "file_exists": false,
+  "message": "需要先转换一个 EPUB 文件",
+  "info": "上传 EPUB 文件后，系统会自动生成 debug.html 用于诊断"
+}
+```
+
+##### View Debug HTML
+
+```bash
+GET /api/debug-html
+```
+
+Returns the debug HTML content to view directly in the browser.
+
+**Example:**
+```bash
+curl http://localhost:8000/api/debug-html
+# Or open in browser: http://localhost:8000/api/debug-html
+```
+
+**Response:** HTML content (200 OK) or error JSON (404 Not Found)
+
+##### Download Debug HTML
+
+```bash
+GET /api/download-debug
+```
+
+Downloads the debug HTML file as an attachment.
+
+**Example:**
+```bash
+curl http://localhost:8000/api/download-debug -o debug.html
+```
+
+**Response:** HTML file download (200 OK) or error JSON (404 Not Found)
+
+##### Debug Workflow
+
+1. **Convert an EPUB file** using `/api/convert`
+2. **Check debug info** at `/api/debug-info` to confirm file was generated
+3. **View in browser** at `/api/debug-html` to inspect rendering
+4. **Download file** at `/api/download-debug` for detailed analysis
+
+**Use Cases:**
+- Verify font sizes are correct in the HTML
+- Check if colors are properly embedded in style attributes
+- Inspect paragraph indentation and alignment
+- Debug image embedding and positioning
+- Validate CSS class conversions to inline styles
+
+**Note:** The debug HTML file is overwritten each time a new EPUB is converted. Only the most recent conversion's debug output is available.
+
 ## Configuration
 
 ### Environment Variables

@@ -627,11 +627,13 @@ class EPUBToPDFConverter:
             # Build HTML document
             html_content = self._build_html_document(epub_book)
 
-            # ⬇️ 在这里添加调试代码 ⬇️
-            with open('/tmp/debug.html', 'w', encoding='utf-8') as f:
-                f.write(html_content)
-            logger.info("Debug HTML saved to /tmp/debug.html")
-            # ⬆️ 添加到这里 ⬆️
+            # Save debug HTML for inspection
+            try:
+                with open('/tmp/debug.html', 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                logger.info("Debug HTML saved to /tmp/debug.html")
+            except Exception as e:
+                logger.warning(f"Failed to save debug.html: {e}")
             
             # Log first 500 characters for debugging
             self.logger.debug(f"Generated HTML (first 500 chars):\n{html_content[:500]}")
