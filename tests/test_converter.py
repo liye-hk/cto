@@ -112,7 +112,8 @@ class TestEPUBToPDFConverter:
 
         # Allowed formatting tags should be preserved in the output
         assert "<b>bold</b>" in escaped
-        assert '<font color="#ff0000">red</font>' in escaped
+        # Font color tags should be converted to span with style for WeasyPrint compatibility
+        assert '<span style="color: #ff0000;">red</span>' in escaped
 
         # Plain text should remain readable
         assert "Text with" in escaped
