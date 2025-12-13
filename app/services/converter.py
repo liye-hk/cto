@@ -49,12 +49,18 @@ section.cover-page {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 section.cover-page img {
-    max-width: 100%;
-    max-height: 100%;
+    width: 8.5in;
+    height: 11in;
+    object-fit: cover;
+    margin: 0;
+    padding: 0;
     page-break-inside: avoid;
 }
 
@@ -63,6 +69,7 @@ h1 {
     font-weight: bold;
     margin: 12pt 0;
     page-break-after: avoid;
+    text-indent: 0;
 }
 
 h2 {
@@ -70,6 +77,7 @@ h2 {
     font-weight: bold;
     margin: 10pt 0;
     page-break-after: avoid;
+    text-indent: 0;
 }
 
 h3 {
@@ -77,11 +85,16 @@ h3 {
     font-weight: bold;
     margin: 8pt 0;
     page-break-after: avoid;
+    text-indent: 0;
+}
+
+h4, h5, h6 {
+    text-indent: 0;
 }
 
 p {
     margin: 6pt 0;
-    text-indent: 0.25in;
+    text-indent: 2em;
 }
 
 div {
@@ -91,9 +104,23 @@ div {
 li {
     margin: 4pt 0;
     margin-left: 20pt;
+    text-indent: 0;
 }
 
-center, .center, .centered, [align="center"] {
+/* Comprehensive center alignment rules */
+center {
+    text-align: center !important;
+}
+
+.center, .centered, .text-center, .align-center {
+    text-align: center !important;
+}
+
+[align="center"] {
+    text-align: center !important;
+}
+
+p[style*="center"], div[style*="center"], section[style*="center"] {
     text-align: center !important;
 }
 
@@ -109,9 +136,13 @@ u {
     text-decoration: underline;
 }
 
-/* Ensure color styles are preserved */
-span[style*="color"], font {
-    /* color already defined in style attribute */
+/* Color preservation - ensure styles with color are applied */
+span[style*="color"] {
+    /* color defined in style attribute */
+}
+
+font {
+    /* deprecated but should respect color attribute if present */
 }
 
 img {
@@ -599,8 +630,15 @@ class EPUBToPDFConverter:
             # Log first 500 characters for debugging
             self.logger.debug(f"Generated HTML (first 500 chars):\n{html_content[:500]}")
             
+            # Extract CSS from EPUB
+            epub_css = self._extract_all_css(epub_book)
+            
             # Add CJK font support if available
             css_content = CSS_STYLES
+            if epub_css:
+                # Prepend EPUB CSS so our base styles override if needed
+                css_content = epub_css + "\n" + css_content
+            
             if self.cjk_font_path:
                 # Embed the CJK font in CSS
                 font_dir = os.path.dirname(self.cjk_font_path)
@@ -945,3 +983,52 @@ class EPUBToPDFConverter:
                 continue
 
         return bold_classes
+
+    def _extract_all_css(self, book: epub.EpubBook) -> str:
+        """Extract all CSS from EPUB book files.
+        
+        This extracts CSS from both standalone CSS files and inline style tags
+        in HTML chapters. All color definitions and other styling rules are preserved.
+        """
+        css_parts = []
+        
+        for item in book.get_items():
+            try:
+                item_type = item.get_type()
+                media_type = getattr(item, 'media_type', '')
+                
+                # Check if it's a CSS file
+                is_css = item_type == ebooklib.ITEM_STYLE
+                if not is_css and isinstance(media_type, str):
+                    is_css = media_type.lower().startswith('text/css')
+                
+                if is_css:
+                    try:
+                        css = item.get_content().decode('utf-8', errors='ignore')
+                        if css.strip():
+                            css_parts.append(css)
+                    except (AttributeError, ValueError):
+                        continue
+                elif isinstance(item, epub.EpubHtml):
+                    # Extract inline style tags from HTML chapters
+                    try:
+                        html = item.get_content().decode('utf-8', errors='ignore')
+                        # Find all <style> tags and extract their content
+                        style_blocks = re.findall(r'(?is)<style[^>]*>(.*?)</style>', html)
+                        for style_block in style_blocks:
+                            if style_block.strip():
+                                css_parts.append(style_block)
+                    except (AttributeError, ValueError):
+                        continue
+            except Exception:
+                continue
+        
+        # Combine all CSS
+        combined_css = '\n'.join(css_parts)
+        
+        # Clean up unnecessary parts and warnings
+        # Remove @import and @namespace that might cause issues
+        combined_css = re.sub(r'@import\s+[^;]+;', '', combined_css)
+        combined_css = re.sub(r'@namespace\s+[^;]+;', '', combined_css)
+        
+        return combined_css if combined_css.strip() else ""
