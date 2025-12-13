@@ -629,7 +629,7 @@ class EPUBToPDFConverter:
 
             # ⬇️ 在这里添加调试代码 ⬇️
             with open('/tmp/debug.html', 'w', encoding='utf-8') as f:
-                f.write(html_document)
+                f.write(html_content)
             logger.info("Debug HTML saved to /tmp/debug.html")
             # ⬆️ 添加到这里 ⬆️
             
